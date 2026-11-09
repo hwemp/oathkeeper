@@ -14,7 +14,8 @@
     "dev": "turbo run dev",
     "start": "npm run start --workspace=@oathkeeper/backend",
     "typecheck": "turbo run typecheck",
-    "test": "npm run test --workspace=@oathkeeper/frontend"
+    "test": "npm run test --workspaces --if-present",
+    "test:integration": "npm run test:integration --workspace=@oathkeeper/backend"
   },
   "devDependencies": {
     "turbo": "^2.8.18"

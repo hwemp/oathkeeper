@@ -6,7 +6,9 @@
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/start.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/policy.test.ts",
+    "test:integration": "node --import tsx --test tests/community.integration.test.ts"
   },
   "dependencies": {
     "@react-router/express": "^8.5.1",

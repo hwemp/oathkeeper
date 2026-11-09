@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Community } from "../community/community";
 import { abilities, calculate, modifier, newCharacter, parseCharacter, serializeCharacter, signed } from "../character/character";
 import type { Character } from "../character/character";
 
@@ -13,6 +14,7 @@ function NumberField({ label, value, min, max, change }: { label: string; value:
 }
 
 export default function Home() {
+  const [tab, setTab] = useState<"character" | "community">("character");
   const [character, setCharacter] = useState(newCharacter);
   const [pending, setPending] = useState<Character | null>(null);
   const [message, setMessage] = useState("");
@@ -55,10 +57,13 @@ export default function Home() {
   }
   return <div className="shell">
     <header className="topbar"><a className="brand" href="/">✧ OATHKEEPER</a><span>Character workshop <span className="badge">Early build</span></span></header>
+    <nav className="section-tabs" aria-label="App sections"><button type="button" aria-pressed={tab === "character"} aria-controls="character-section" onClick={() => setTab("character")}>Character workshop</button><button type="button" aria-pressed={tab === "community"} aria-controls="community-section" onClick={() => setTab("community")}>Community</button></nav>
     <main>
+      <div id="community-section" hidden={tab !== "community"}><Community /></div>
+      <div id="character-section" hidden={tab !== "character"}>
       <div className="intro"><p className="eyebrow">YOUR NEXT ADVENTURE STARTS HERE</p><h1>Every hero starts<br />with a story.</h1><p>Give yours a name. Build their foundation.<br />Keep the details close when the dice start rolling.</p></div>
       <div className="workspace-heading"><div><p className="eyebrow">2014 FIFTH EDITION</p><h2>Character worksheet</h2></div><div className="actions"><button type="button" onClick={() => fileInput.current?.click()}>Restore a save</button><button className="primary" type="button" onClick={download}>Download character</button><input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={event => { void importFile(event.target.files?.[0]); event.target.value = ""; }} /></div></div>
-      <p className="notice">{dirty ? "You have changes to download. " : "This worksheet stays in this tab only. "}Download a save before leaving. Accounts and online saving are not available yet.</p>
+      <p className="notice">{dirty ? "You have changes to download. " : "This worksheet stays in this tab only. "}Download a save before leaving. Online character saving is not available yet. Community accounts do not save this worksheet.</p>
       <p role="status" className="status">{message}</p>
       {pending && <div className="panel review" ref={review} tabIndex={-1}>
         <p className="eyebrow">REVIEW YOUR SAVE</p><h2>{pending.name || "Unnamed character"}</h2>
@@ -89,7 +94,8 @@ export default function Home() {
           </section>
           <section className="panel"><p className="eyebrow">03 / MAKE IT YOURS</p><h2>Manual adjustments & notes</h2><NumberField label="Initiative adjustment" value={character.initiativeAdjustment} min={-100} max={100} change={initiativeAdjustment => update({ initiativeAdjustment })} /><p className="hint">Add bonuses from features or other sources here. Manual adjustments accept whole numbers from −100 to 100.</p><label>Features, equipment, background & adjustment sources<textarea rows={6} value={character.notes} placeholder="Record unsupported features and explain your manual adjustments…" onChange={event => update({ notes: event.target.value })} /></label><p className="hint">Notes are preserved in your save. They do not change calculations.</p></section>
         </form>
-        <aside><section className="panel summary"><p className="eyebrow">AT A GLANCE</p><h2>{character.name || "Your adventurer"}</h2><p>Level {character.level} · 2014 rules</p>{!valid && <p role="alert" className="notice">Correct the highlighted fields. Results use the last valid values; downloading is blocked until all fields are valid.</p>}<div className="summary-stat"><span>Proficiency bonus</span><strong>{signed(results.proficiency)}</strong></div><div className="summary-stat"><span>Initiative</span><strong>{signed(results.initiative)}</strong></div><p className="formula">{signed(modifier(character.abilities.Dexterity.score))} Dexterity + ({signed(character.initiativeAdjustment)}) manual</p><hr /><h3>What is automated?</h3><p>Ability modifiers, level-based proficiency, selected saving throws, and basic initiative.</p><h3>Still to come</h3><p>Guided creation and leveling, class and race features, skills, combat, spells, and PDF import with review.</p></section><section className="panel community"><p className="eyebrow">BEYOND THE CHARACTER SHEET</p><h2>A place for your party.</h2><p>Public discussions, private gaming groups, live chat, and shared media are planned for the first release. They are not available in this build.</p></section></aside>
+        <aside><section className="panel summary"><p className="eyebrow">AT A GLANCE</p><h2>{character.name || "Your adventurer"}</h2><p>Level {character.level} · 2014 rules</p>{!valid && <p role="alert" className="notice">Correct the highlighted fields. Results use the last valid values; downloading is blocked until all fields are valid.</p>}<div className="summary-stat"><span>Proficiency bonus</span><strong>{signed(results.proficiency)}</strong></div><div className="summary-stat"><span>Initiative</span><strong>{signed(results.initiative)}</strong></div><p className="formula">{signed(modifier(character.abilities.Dexterity.score))} Dexterity + ({signed(character.initiativeAdjustment)}) manual</p><hr /><h3>What is automated?</h3><p>Ability modifiers, level-based proficiency, selected saving throws, and basic initiative.</p><h3>Still to come</h3><p>Guided creation and leveling, class and race features, skills, combat, spells, and PDF import with review.</p></section><section className="panel community"><p className="eyebrow">BEYOND THE CHARACTER SHEET</p><h2>A place for your party.</h2><p>Share posts and files, join private gaming groups, and exchange messages in the Community tab. Sign in there to connect with your party.</p><button type="button" onClick={() => { setTab("community"); window.scrollTo({ top: 0 }); }}>Open Community</button></section></aside>
+      </div>
       </div>
     </main>
     <footer><p>Oathkeeper · A character’s story, kept close.</p><details><summary>Rules source & attribution</summary><p>This work includes material taken from the System Reference Document 5.1 (“SRD 5.1”) by Wizards of the Coast LLC and available at <a href="https://dnd.wizards.com/resources/systems-reference-document">https://dnd.wizards.com/resources/systems-reference-document</a>. The SRD 5.1 is licensed under the Creative Commons Attribution 4.0 International License available at <a href="https://creativecommons.org/licenses/by/4.0/legalcode">https://creativecommons.org/licenses/by/4.0/legalcode</a>.</p><p>Selected rules are adapted into calculations and original interface explanations. Full Player’s Handbook content is not included.</p></details></footer>

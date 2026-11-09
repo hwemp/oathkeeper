@@ -1,13 +1,14 @@
 import { createRequestHandler } from "@react-router/express";
 import express from "express";
 import { fileURLToPath } from "node:url";
-import { connectDatabase, mongoClient, pingDatabase } from "./database.js";
+import { connectDatabase, database, mongoClient, pingDatabase } from "./database.js";
+import { createCommunityRouter } from "./community/router.js";
 
 const production = process.env.NODE_ENV === "production";
 
 const app = express();
 app.disable("x-powered-by");
-app.use(express.json());
+app.use(express.json({ limit: '32kb' }));
 
 app.get("/api/health", async (_request, response) => {
   try {
@@ -17,6 +18,19 @@ app.get("/api/health", async (_request, response) => {
     response.status(503).json({ status: "unavailable" });
   }
 });
+
+try {
+  await connectDatabase();
+  app.use('/api/community', await createCommunityRouter(database, {
+    directory: process.env.UPLOAD_DIR ?? (production ? null : fileURLToPath(new URL('../../../.data/uploads/', import.meta.url))),
+    secureCookies: production && process.env.COOKIE_SECURE !== 'false',
+    moderator: process.env.MODERATOR_USERNAME,
+  }));
+} catch {
+  console.error('Could not initialize community storage. Check MongoDB and UPLOAD_DIR.');
+  await mongoClient.close();
+  process.exit(1);
+}
 
 app.use("/api", (_request, response) => {
   response.status(404).json({ error: "Not found" });
@@ -35,12 +49,6 @@ if (production) {
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
-try {
-  await connectDatabase();
-} catch {
-  console.error("Could not connect to MongoDB. Check MONGODB_URI and database availability.");
-  process.exit(1);
-}
 const server = app.listen(port, host, () => {
   console.log(`Oathkeeper backend listening on http://${host}:${port}`);
 });

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Oathkeeper</title>
+  <path fill="#284d41" d="M32 2 58 11V32L54 43 45 53 32 62 19 53 10 43 6 32V11Z"/>
+  <path fill="#af7c33" d="M32 7 53 15V31L49 40 42 48 32 55 22 48 15 40 11 31V15Z"/>
+  <path fill="#284d41" d="M32 11 49 18V30L46 38 39 46 32 51 25 46 18 38 15 30V18Z"/>
+  <path fill="#fffdf7" d="M32 15 36 22V34H28V22Z"/>
+  <path fill="#fffdf7" d="M21 32H43V37H35V43H29V37H21Z"/>
+  <path fill="#af7c33" d="M29 43H35V48H29Z"/>
+</svg>

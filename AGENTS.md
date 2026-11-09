@@ -36,6 +36,34 @@ Oathkeeper is an online Dungeons & Dragons character tracker and community app.
 Character tracking and community features are both part of the intended first
 release. Develop them in manageable steps without silently reducing that scope.
 
+## Current implementation and recorded decisions
+
+- The character worksheet supports calculated values, manual adjustments, and
+  JSON download/restore with a review step. Characters remain in the current
+  browser tab until downloaded; community accounts do not save them online.
+- Guided character creation and leveling, online character storage, and PDF
+  import remain planned work. Do not describe these as available features.
+- Community accounts, public posts/comments, invitation-only private groups,
+  group messages, local uploads, and public reporting are implemented. Chat
+  currently refreshes every three seconds.
+- Follow the documented community access rules: invitations require acceptance,
+  group owners moderate private groups, and a server-designated moderator
+  handles public reports. See `docs/community.md` for permissions and testing.
+- Recorded upload limits are 100 MB per photo, 500 MB per video, and 1 GB per
+  PDF/other file, with a 5 GB app-wide file-storage cap. Pause uploads when full;
+  preserve this cap when adding cloud storage.
+- The owner selected Render Free for app hosting. MongoDB Atlas and Cloudflare
+  R2 are recommendations, not configured services. See `docs/hosting.md` for
+  setup status and remaining owner steps. Deployment configuration exists, but
+  the app has not yet been deployed there.
+- Production uploads require durable storage. Keep uploads disabled on Render
+  Free until a durable storage adapter is implemented; its temporary disk must
+  not hold uploaded files. The current local adapter supports one backend process.
+
+Consult the recorded decisions before asking the owner to choose again. Ask
+about unresolved choices, including character visibility and any hosting costs
+not already approved. Keep this status aligned with the README as work advances.
+
 ## Implementation guidance
 
 - Build on the existing project structure and conventions.
@@ -70,15 +98,18 @@ Run commands from the repository root:
 npm ci                         # Install dependencies
 docker compose up -d mongo     # Start the local database
 npm run dev                    # Start development servers
-npm test                       # Run character calculation and save-file tests
+npm test                       # Run character, save-file, and community policy tests
+npm run test:integration        # Run community API tests; requires local MongoDB
 npm run typecheck              # Check TypeScript types
 npm run build                  # Build both applications
 npm start                      # Run the built application; requires MongoDB
 ```
 
-Character calculation and save-file tests run with Node's built-in test runner.
-Add focused tests as features require them, and document how to run them. Keep these instructions
-and the README aligned with changes to setup or verification commands.
+Character, save-file, and community tests run with Node's built-in test runner.
+Community integration tests use an isolated temporary database on local MongoDB.
+Add focused tests as features require them, and document how to run them. Keep
+these instructions and the README aligned with changes to setup or verification
+commands.
 
 For documentation-only changes, review the content and run `git diff --check`.
 For application changes, run relevant tests, type checks, and build checks as

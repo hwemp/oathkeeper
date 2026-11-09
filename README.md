@@ -10,23 +10,31 @@ modifiers, proficiency, saving throws, initiative, manual adjustments, and notes
 Download and restore JSON save files, with a review before replacing the current
 worksheet. Work lives only in the current tab until downloaded.
 
-Accounts, online character storage, guided creation/leveling, PDF import, and
-community features are not implemented yet. Character tracking and community
-remain part of the intended first release. See [the roadmap](docs/roadmap.md) for
-stages and unresolved product choices, and [rules sources](docs/rules-sources.md)
-for supported rules and attribution.
+The Community tab now provides accounts, public posts and comments, private
+invitation-only groups, group messages, uploads, and public reporting. Posts and
+messages persist in MongoDB. Development uploads persist in `.data/uploads`.
+Photos allow 100 MB, videos 500 MB, and PDFs/other files 1 GB each, with a 5 GB
+app-wide storage cap. Chat refreshes every three seconds.
+
+Guided character creation/leveling, online character storage, and PDF character
+import are not implemented yet. Community accounts do not save character
+worksheets. See [community setup and testing](docs/community.md),
+[the roadmap](docs/roadmap.md), and [rules sources](docs/rules-sources.md).
 
 ## Verification
 
 ```bash
 npm test
+npm run test:integration # Requires local MongoDB
 npm run typecheck
 npm run build
 ```
 
-Tests use Node's built-in test runner and require no database. They cover rule
-boundaries, recalculation with manual adjustments, complete save-file round trips,
-and rejection of malformed or unsupported files.
+Unit tests use Node's built-in test runner and require no database. They cover
+character calculations, save files, upload-limit policy, and deletion permissions.
+Community integration tests run against real MongoDB in an isolated temporary
+database, covering account sessions, access checks, uploads, quota recovery,
+comments, messages, and moderation. They delete only their own test database.
 
 To try the worksheet without MongoDB, run
 `npm run dev --workspace=@oathkeeper/frontend` and open http://localhost:5173.
@@ -34,6 +42,10 @@ Change Dexterity and level, mark a saving throw proficient, and add manual
 adjustments. Download, edit the worksheet, then restore the file; verify both
 cancel and replace in the review. Invalid number fields should block downloading.
 
+To try Community, start MongoDB and both development servers with the commands
+below. Use a regular browser window and a private window for two separate
+accounts. Follow [the local walkthrough](docs/community.md). Frontend-only mode
+can show the worksheet but cannot load the community API.
 
 ```text
 apps/
@@ -72,6 +84,11 @@ Browser code can use relative `/api/...` URLs in both environments. Server-side
 loaders need an absolute URL when fetching the API.
 
 ## Production
+
+Render Free is the selected app host. The root `render.yaml` configures a Docker
+web service and prompts for a private `MONGODB_URI`. See
+[hosting and owner next steps](docs/hosting.md) for database setup and deployment.
+The configuration has not yet been deployed to Render.
 
 ```bash
 npm run typecheck
