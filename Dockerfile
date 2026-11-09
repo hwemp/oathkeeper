@@ -22,6 +22,7 @@ FROM base AS runner
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3000
+ENV MONGODB_URI=mongodb://mongo:27017/oathkeeper
 COPY --from=production-dependencies /app/ ./
 COPY --from=build /app/apps/frontend/build ./apps/frontend/build
 COPY --from=build /app/apps/backend/dist ./apps/backend/dist
@@ -29,4 +30,4 @@ USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + process.env.PORT + '/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
-CMD ["node", "apps/backend/dist/index.js"]
+CMD ["node", "apps/backend/dist/start.js"]

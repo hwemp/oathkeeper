@@ -18,7 +18,8 @@
       "persistent": true,
       "passThroughEnv": [
         "PORT",
-        "HOST"
+        "HOST",
+        "MONGODB_URI"
       ]
     },
     "typecheck": {
