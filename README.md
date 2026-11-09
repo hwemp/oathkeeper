@@ -1,6 +1,39 @@
 # Oathkeeper
 
-An npm workspaces monorepo managed by Turborepo. Requires Node.js 24+ and npm 11.
+An online Dungeons & Dragons character tracker and community app in early
+development. Requires Node.js 24+ and npm 11; uses npm workspaces and Turborepo.
+
+## Current build
+
+The home page provides a 2014 fifth edition character worksheet with ability
+modifiers, proficiency, saving throws, initiative, manual adjustments, and notes.
+Download and restore JSON save files, with a review before replacing the current
+worksheet. Work lives only in the current tab until downloaded.
+
+Accounts, online character storage, guided creation/leveling, PDF import, and
+community features are not implemented yet. Character tracking and community
+remain part of the intended first release. See [the roadmap](docs/roadmap.md) for
+stages and unresolved product choices, and [rules sources](docs/rules-sources.md)
+for supported rules and attribution.
+
+## Verification
+
+```bash
+npm test
+npm run typecheck
+npm run build
+```
+
+Tests use Node's built-in test runner and require no database. They cover rule
+boundaries, recalculation with manual adjustments, complete save-file round trips,
+and rejection of malformed or unsupported files.
+
+To try the worksheet without MongoDB, run
+`npm run dev --workspace=@oathkeeper/frontend` and open http://localhost:5173.
+Change Dexterity and level, mark a saving throw proficient, and add manual
+adjustments. Download, edit the worksheet, then restore the file; verify both
+cancel and replace in the review. Invalid number fields should block downloading.
+
 
 ```text
 apps/
