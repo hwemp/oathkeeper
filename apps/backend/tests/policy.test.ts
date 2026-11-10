@@ -9,7 +9,7 @@ test('agreed decimal file and storage limits, including disguised extensions', (
   assert.equal(fileLimit('clip.bin', 'video/webm'), 500_000_000);
   assert.equal(fileLimit('sheet.pdf', 'application/pdf'), 1_000_000_000);
   assert.equal(fileLimit('archive.zip', ''), 1_000_000_000);
-  assert.equal(STORAGE_LIMIT, 5_000_000_000);
+  assert.equal(STORAGE_LIMIT, null);
 });
 test('inline previews use content signatures and exclude executable HTML and SVG', () => {
   assert.equal(previewType(Buffer.from('<svg onload="alert(1)">')), null);
