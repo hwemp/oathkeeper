@@ -1,6 +1,7 @@
 export const MB = 1_000_000;
 export const GB = 1_000_000_000;
-export const STORAGE_LIMIT = 5 * GB;
+// No fixed total cap. Operators may supply a finite storageLimit for a deployment.
+export const STORAGE_LIMIT: number | null = null;
 
 export function fileLimit(name: string, type: string) {
   if (type.startsWith('image/') || /\.(avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i.test(name)) return 100 * MB;
