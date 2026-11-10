@@ -2,7 +2,9 @@
 
 Researched November 9, 2026. The owner selected Render Free for app hosting.
 MongoDB Atlas and Cloudflare R2 remain recommended supporting services.
-This is not a deployed setup or a guarantee of a monthly bill below $10.
+These are historical recommendations, not a deployed setup. The owner now
+wants local app review before purchasing anything. The earlier $10 budget is
+superseded; review current pricing before any later paid activation.
 
 ## Recommended starting services
 
@@ -28,8 +30,9 @@ use multipart uploads so failed parts can be retried. This is planned work.
 
 Ten 1 GB files kept for a full month would consume the entire free storage
 allowance. File-size limits alone cannot keep the total bill within budget.
-The owner approved a 5 GB total file-storage cap and pausing uploads when full.
-This cap is enforced locally; it must also apply to future cloud storage.
+The owner replaced the previous 5 GB quota with expandable storage and no fixed
+count or total quota. The local adapter tracks usage but actual disk capacity
+still applies. Cloud storage is not connected; nothing is being purchased.
 Budget alerts provide notifications, not a guaranteed spending ceiling.
 [Cloudflare budget alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/).
 

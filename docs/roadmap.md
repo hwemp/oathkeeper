@@ -36,17 +36,16 @@ Approved by the owner on November 9, 2026. These rules are implemented in the lo
 - Private groups are visible only to invited members. Group owners manage
   invitations.
 - Every group member may post and chat. Only the group owner can remove members.
-- Messaging takes place within groups.
+- Messaging takes place within groups and between accepted friends.
 - Authors can delete their own posts. Group owners can remove group content.
 - Public content can be reported. The owner reviews reports through a configured
   moderator account and can remove reported posts and their comments/files.
 - Photos may be up to 100 MB each; videos may be up to 500 MB each.
-  PDFs and other files may be up to 1 GB each. Total file storage is capped at 5 GB
-  for the whole app; new uploads pause when full. Files stay until their post is
-  deleted. These additional rules were approved on November 9, 2026.
-- Total hosting budget: $0–$10 per month, preferring free services where feasible.
-  Evaluate application hosting, database, file storage, and transfer costs within
-  this total. The per-file limits do not imply unlimited total storage or traffic.
+  PDFs and other files may be up to 1 GB each. The owner subsequently replaced
+  the 5 GB total cap with expandable storage and no fixed upload count. Files
+  stay until their post is deleted; actual storage capacity still applies.
+- The earlier $0–$10 hosting budget is superseded. Build and review the app
+  locally before purchasing services; select and review paid hosting later.
 
 ## Next development stages
 
@@ -58,7 +57,7 @@ These stages are work divisions, not a reduction of launch scope.
    adjustments with tests. Add 2014 Player's Handbook options only after
    establishing permission for the specific included material.
 2. Agree character visibility and account behavior. Select hosting within the
-   agreed $0–$10 monthly budget. Implement
+   future reviewed monthly budget. Implement
    accounts and online storage with access checks and recovery behavior.
 3. Extend and harden the implemented community features for public launch,
    including account recovery, moderation policy, and operational monitoring.
@@ -81,3 +80,11 @@ These have not been decided or implemented:
 - Expected initial audience, to help size hosting within the agreed budget.
 
 Ask about each choice before implementing features that depend on it.
+
+## Added community scope
+
+Friend requests, acceptance/decline/cancel, friend removal, friend-only direct
+messages, blocking/unblocking, user and individual-message reports, and moderator
+message removal are implemented for local testing. Existing general uploads
+cover map files and character sheets. Native integration, cloud storage,
+moderator account suspension, and recovery remain planned work.
