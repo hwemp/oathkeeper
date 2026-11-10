@@ -25,6 +25,7 @@ export default function Home() {
   const fileInput = useRef<HTMLInputElement>(null);
   const review = useRef<HTMLDivElement>(null);
   const results = calculate(character);
+  useEffect(() => { if (new URLSearchParams(window.location.search).get('community') === '1') setTab('community'); }, []);
   useEffect(() => {
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
