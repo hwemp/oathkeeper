@@ -1,14 +1,15 @@
+import { Friends, SafetyQueue } from './social';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 type User = { id: string; username: string; moderator: boolean };
-type Session = { user: User | null; uploadsEnabled: boolean; storageLimit: number; storageUsed: number };
+type Session = { user: User | null; uploadsEnabled: boolean; storageLimit: number | null; storageUsed: number };
 type Group = { _id: string; name: string; ownerId: string; members: string[] };
 type Attachment = { _id: string; name: string; size: number; preview: string | null };
 type Post = { _id: string; authorId: string; author: string; text: string; created: string; groupId: string | null; files: Attachment[]; canDelete: boolean };
 type Entry = { _id: string; authorId: string; author: string; text: string; created: string };
 const base = '/api/community';
 
-async function api<T = { ok: boolean }>(path: string, method = 'GET', body?: unknown): Promise<T> {
+export async function api<T = { ok: boolean }>(path: string, method = 'GET', body?: unknown): Promise<T> {
   let response: Response;
   try { response = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', 'X-Oathkeeper-Request': '1' }, body: body === undefined ? undefined : JSON.stringify(body) }); }
   catch { throw new Error('Cannot reach Oathkeeper. Check that the local server is running.'); }
@@ -77,6 +78,7 @@ export function Community() {
           </form><p className="hint">Keep your password safe. Password recovery is not available in this first version.</p>
         </>}
       </section>
+      {session.user && <Friends key={session.user.id} userId={session.user.id} />}
       <div className="community-controls panel">
         <label>Where would you like to share?<select value={scope} onChange={event => setScope(event.target.value)}><option value="">Public community</option>{groups.map(group => <option key={group._id} value={group._id}>{group.name} · Private</option>)}</select></label>
         {session.user && <>
@@ -86,7 +88,7 @@ export function Community() {
       </div>
       {group && session.user && <GroupMembers key={group._id} group={group} user={session.user} />}
       <CommunitySpace key={`${session.user?.id ?? 'guest'}:${scope}`} session={session} group={group} onStorageChange={() => void refresh().catch(error => setError(errorText(error)))} />
-      {session.user?.moderator && <ReportQueue />}
+      {session.user?.moderator && <><ReportQueue /><SafetyQueue /></>}
     </>}
   </>;
 }
@@ -149,9 +151,9 @@ function CommunitySpace({ session, group, onStorageChange }: { session: Session;
     {session.user && <div className="panel"><p className="eyebrow">{group ? 'PRIVATE GROUP' : 'PUBLIC COMMUNITY'}</p><h2>Share an adventure</h2>
       <form onSubmit={event => { event.preventDefault(); void publish(); }}>
         <label>Post text<textarea rows={4} maxLength={10000} disabled={busy} value={text} onChange={event => setText(event.target.value)} placeholder="A memorable moment, a map, or a recap…" /></label>
-        <label className="file-picker">Attach photos, videos, or files<input ref={fileInput} type="file" multiple disabled={busy || !session.uploadsEnabled} onChange={event => { const selected = Array.from(event.target.files ?? []); if (selected.length > 10) { setError('Choose up to 10 files per post.'); event.target.value = ''; setFiles([]); } else { setFiles(selected); setError(''); } }} /></label>
-        <p className="hint">Per file: photos 100 MB · videos 500 MB · other files 1 GB. Up to 10 files per post. Files remain until the post is deleted.</p>
-        <p className="hint">App storage: {(session.storageUsed / 1e9).toFixed(2)} / {(session.storageLimit / 1e9).toFixed(0)} GB. Uploads pause when full.</p>
+        <label className="file-picker">Attach images, videos, maps, character sheets, or files<input ref={fileInput} type="file" multiple disabled={busy || !session.uploadsEnabled} onChange={event => { setFiles(Array.from(event.target.files ?? [])); setError(''); }} /></label>
+        <p className="hint">Per file: photos 100 MB · videos 500 MB · other files 1 GB. No fixed file count limit. Files remain until the post is deleted.</p>
+        <p className="hint">App storage: {(session.storageUsed / 1e9).toFixed(2)} GB used{session.storageLimit === null ? ' · Expandable storage, no fixed total cap.' : ` / ${(session.storageLimit / 1e9).toFixed(0)} GB. Uploads pause when full.`}</p>
         {!session.uploadsEnabled && <p className="notice">File storage is not connected on this server yet. Text posts and messages are available.</p>}
         <ul className="member-list">{files.map((file, index) => <li key={`${file.name}:${index}`}>{file.name} · {(file.size / 1e6).toFixed(2)} MB <button type="button" disabled={busy} onClick={() => setFiles(current => current.filter((_, i) => i !== index))}>Remove</button></li>)}</ul>
         <button className="primary" disabled={busy || (!text.trim() && !files.length)}>{busy ? 'Publishing…' : group ? 'Post to group' : 'Post publicly'}</button>
@@ -191,7 +193,7 @@ function Chat({ group, user }: { group: Group; user: User }) {
   useEffect(() => { let active = true; let loading = false; const load = async () => { if (loading) return; loading = true; try { const entries = await api<Entry[]>(`/groups/${group._id}/messages`); if (active) { setMessages(entries); setError(''); } } catch (error) { if (active) { setMessages([]); setError(errorText(error)); } } finally { loading = false; } }; void load(); const timer = window.setInterval(() => void load(), 3000); return () => { active = false; window.clearInterval(timer); }; }, [group._id]);
   useEffect(() => { const element = log.current; if (element) element.scrollTop = element.scrollHeight; }, [messages.length]);
   return <><p className="eyebrow">AROUND THE TABLE</p><h2>Group messages</h2><p className="hint">Only members of {group.name} · Latest 100 messages · Updates every 3 seconds.</p>
-    <div ref={log} className="message-log" role="log" aria-label="Group conversation">{!messages.length && <p>No messages yet. Start the conversation.</p>}{messages.map(entry => <div className="message-bubble" key={entry._id}><strong>{entry.author}</strong><p className="hint">{date(entry.created)}</p><p className="post-text">{entry.text}</p>{(entry.authorId === user.id || group.ownerId === user.id) && <button disabled={busy} onClick={async () => { setBusy(true); try { await api(`/groups/${group._id}/messages/${entry._id}`, 'DELETE'); await refresh(); } catch (error) { setError(errorText(error)); } finally { setBusy(false); } }}>Delete message</button>}</div>)}</div>
+    <div ref={log} className="message-log" role="log" aria-label="Group conversation">{!messages.length && <p>No messages yet. Start the conversation.</p>}{messages.map(entry => <div className="message-bubble" key={entry._id}><strong>{entry.author}</strong><p className="hint">{date(entry.created)}</p><p className="post-text">{entry.text}</p>{entry.authorId !== user.id && <SafetyReportButton kind="group" targetId={entry._id} />}{(entry.authorId === user.id || group.ownerId === user.id) && <button disabled={busy} onClick={async () => { setBusy(true); try { await api(`/groups/${group._id}/messages/${entry._id}`, 'DELETE'); await refresh(); } catch (error) { setError(errorText(error)); } finally { setBusy(false); } }}>Delete message</button>}</div>)}</div>
     <form onSubmit={async event => { event.preventDefault(); setBusy(true); setError(''); try { await api(`/groups/${group._id}/messages`, 'POST', { text }); setText(''); await refresh(); } catch (error) { setError(errorText(error)); } finally { setBusy(false); } }}><label>Message<textarea rows={3} required maxLength={4000} disabled={busy} value={text} onChange={event => setText(event.target.value)} /></label><button className="primary" disabled={busy || !text.trim()}>{busy ? 'Sending…' : 'Send message'}</button></form>
     {error && <p role="alert" className="notice">{error}</p>}
   </>;
@@ -203,4 +205,9 @@ function ReportQueue() {
   const refresh = useCallback(async () => { try { setReports(await api('/reports')); } catch (error) { setReports([]); setStatus(errorText(error)); } }, []);
   useEffect(() => { void refresh(); }, [refresh]);
   return <section className="panel"><h2>Public reports</h2><button disabled={busy} onClick={() => void refresh()}>Refresh reports</button>{!reports.length && <p>No open reports.</p>}{reports.map(report => <div className="report" key={report._id}><p className="post-text"><strong>Reason:</strong> {report.reason}</p><p className="post-text">{report.post?.text ?? 'Post no longer available.'}</p><div className="attachment-grid">{report.post?.files.map(file => <AttachmentView key={file._id} file={file} />)}</div><details><summary>Review comments</summary>{report.comments.map(comment => <p className="post-text" key={comment._id}><strong>{comment.author}:</strong> {comment.text}</p>)}</details><p className="hint">Post ID: {report.postId}</p>{[false, true].map(remove => <button key={String(remove)} disabled={busy} onClick={async () => { if (remove && !window.confirm('Remove the reported post, comments, and files?')) return; setBusy(true); try { await api(`/reports/${report._id}/resolve`, 'POST', { remove }); await refresh(); setStatus(remove ? 'Reported content removed.' : 'Report dismissed.'); } catch (error) { setStatus(errorText(error)); } finally { setBusy(false); } }}>{remove ? 'Remove reported post' : 'Dismiss report'}</button>)}</div>)}<p role="status">{status}</p></section>;
+}
+
+export function SafetyReportButton({ kind, targetId }: { kind: 'user' | 'direct' | 'group'; targetId: string }) {
+  const [open, setOpen] = useState(false), [reason, setReason] = useState(''), [status, setStatus] = useState(''), [busy, setBusy] = useState(false);
+  return <span><button type="button" onClick={() => setOpen(v => !v)}>Report {kind === 'user' ? 'user' : 'message'}</button>{open && <span className="report"><label>Reason for reporting<textarea required maxLength={2000} value={reason} onChange={e => setReason(e.target.value)} /></label><button type="button" disabled={busy || !reason.trim()} onClick={async () => { setBusy(true); try { await api('/safety-reports', 'POST', { kind, targetId, reason }); setOpen(false); setReason(''); setStatus('Report sent for review.'); } catch(e) { setStatus(errorText(e)); } finally { setBusy(false); } }}>Submit report</button></span>}<span role="status">{status}</span></span>;
 }
