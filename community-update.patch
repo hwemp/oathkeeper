@@ -1,0 +1,705 @@
+From 3ab2eb9bf5b737da1ebec8dc1fdc7b05886bf87b Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 19:26:37 -0600
+Subject: [PATCH 1/2] Add friends, direct messages, blocking, reporting and
+ expandable uploads
+
+---
+ AGENTS.md                                     |  11 +-
+ README.md                                     |  22 ++-
+ apps/backend/src/community/policy.ts          |   3 +-
+ apps/backend/src/community/router.ts          | 136 +++++++++++++++++-
+ .../tests/community.integration.test.ts       |  55 +++++++
+ apps/backend/tests/policy.test.ts             |   2 +-
+ apps/frontend/app/community/community.tsx     |  21 ++-
+ apps/frontend/app/community/social.tsx        |  45 ++++++
+ docs/community.md                             |  36 ++++-
+ docs/hosting.md                               |   9 +-
+ docs/roadmap.md                               |  23 +--
+ 11 files changed, 328 insertions(+), 35 deletions(-)
+ create mode 100644 apps/frontend/app/community/social.tsx
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 69cb1e2..5dd7a31 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -45,13 +45,18 @@ release. Develop them in manageable steps without silently reducing that scope.
+   import remain planned work. Do not describe these as available features.
+ - Community accounts, public posts/comments, invitation-only private groups,
+   group messages, local uploads, and public reporting are implemented. Chat
+-  currently refreshes every three seconds.
++  currently refreshes every three seconds. Friend requests/lists, friend-only
++  direct messaging, blocking, and user/group-message/direct-message reports are
++  implemented for local testing. Blocking hides content in both directions when
++  signed in and stops direct contact; shared group membership is unchanged.
+ - Follow the documented community access rules: invitations require acceptance,
+   group owners moderate private groups, and a server-designated moderator
+   handles public reports. See `docs/community.md` for permissions and testing.
+ - Recorded upload limits are 100 MB per photo, 500 MB per video, and 1 GB per
+-  PDF/other file, with a 5 GB app-wide file-storage cap. Pause uploads when full;
+-  preserve this cap when adding cloud storage.
++  PDF/other file. The owner superseded the 5 GB cap and $10 budget with
++  expandable storage and no fixed upload count or total app quota. Build and
++  review locally before purchasing anything; no paid services are authorized
++  for activation by this development request. Local disk capacity still applies.
+ - The owner selected Render Free for app hosting. MongoDB Atlas and Cloudflare
+   R2 are recommendations, not configured services. See `docs/hosting.md` for
+   setup status and remaining owner steps. Deployment configuration exists, but
+diff --git a/README.md b/README.md
+index 3bfd013..f9db280 100644
+--- a/README.md
++++ b/README.md
+@@ -11,10 +11,11 @@ Download and restore JSON save files, with a review before replacing the current
+ worksheet. Work lives only in the current tab until downloaded.
+ 
+ The Community tab now provides accounts, public posts and comments, private
+-invitation-only groups, group messages, uploads, and public reporting. Posts and
++invitation-only groups, group messages, uploads, friend requests and lists, private
++direct messages, blocking, and user/message reporting. Posts and
+ messages persist in MongoDB. Development uploads persist in `.data/uploads`.
+-Photos allow 100 MB, videos 500 MB, and PDFs/other files 1 GB each, with a 5 GB
+-app-wide storage cap. Chat refreshes every three seconds.
++Photos allow 100 MB, videos 500 MB, and PDFs/other files 1 GB each. There is
++no fixed upload count or app-wide storage cap; physical disk capacity still applies. Chat refreshes every three seconds.
+ 
+ Guided character creation/leveling, online character storage, and PDF character
+ import are not implemented yet. Community accounts do not save character
+@@ -34,7 +35,7 @@ Unit tests use Node's built-in test runner and require no database. They cover
+ character calculations, save files, upload-limit policy, and deletion permissions.
+ Community integration tests run against real MongoDB in an isolated temporary
+ database, covering account sessions, access checks, uploads, quota recovery,
+-comments, messages, and moderation. They delete only their own test database.
++comments, messages, friendships, blocking, private conversations, and moderation. They delete only their own test database.
+ 
+ To try the worksheet without MongoDB, run
+ `npm run dev --workspace=@oathkeeper/frontend` and open http://localhost:5173.
+@@ -130,3 +131,16 @@ The driver setup follows the [MongoDB connection documentation](https://www.mong
+ 
+ Configuration references: [Turborepo tasks](https://turborepo.dev/docs/crafting-your-repository/configuring-tasks)
+ and [React Router custom servers](https://reactrouter.com/tutorials/quickstart).
++
++## Build before purchasing
++
++The owner requested local app review before purchasing services. No paid service
++is needed to develop or test this repository. The prior 5 GB total quota and
++$10 monthly budget are superseded by expandable storage; actual paid services
++remain unconfigured and must be reviewed before activation.
++
++This repository is the online app. `hwemp/Oathkeeper-App` is a separate native
++Capacitor project with offline character tools, local PDF/text/JSON import,
++inventory, powers, journal, and dice. Those native tools and its APK are not
++updated by changes in this repository. Combining the mobile shell with the
++online community remains separate integration work.
+diff --git a/apps/backend/src/community/policy.ts b/apps/backend/src/community/policy.ts
+index 08f8d84..4c030e9 100644
+--- a/apps/backend/src/community/policy.ts
++++ b/apps/backend/src/community/policy.ts
+@@ -1,6 +1,7 @@
+ export const MB = 1_000_000;
+ export const GB = 1_000_000_000;
+-export const STORAGE_LIMIT = 5 * GB;
++// No fixed total cap. Operators may supply a finite storageLimit for a deployment.
++export const STORAGE_LIMIT: number | null = null;
+ 
+ export function fileLimit(name: string, type: string) {
+   if (type.startsWith('image/') || /\.(avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i.test(name)) return 100 * MB;
+diff --git a/apps/backend/src/community/router.ts b/apps/backend/src/community/router.ts
+index d5c4daf..2c3e007 100644
+--- a/apps/backend/src/community/router.ts
++++ b/apps/backend/src/community/router.ts
+@@ -24,6 +24,10 @@ interface FileRecord { _id: string; postId: string; name: string; size: number;
+ interface Report { _id: string; postId: string; reporterId: string; reason: string; created: Date; resolved: boolean }
+ interface Options { directory: string | null; secureCookies?: boolean; moderator?: string; storageLimit?: number }
+ 
++interface Friendship { _id: string; members: string[]; senderId: string; accepted: boolean }
++interface Block { _id: string; ownerId: string; targetId: string }
++interface SafetyReport { _id: string; reporterId: string; kind: 'user' | 'direct' | 'group'; targetId: string; targetUserId: string; reason: string; evidence: string; created: Date; resolved: boolean }
++
+ export async function createCommunityRouter(db: Db, options: Options) {
+   const router = Router();
+   const users = db.collection<User>('users');
+@@ -34,6 +38,10 @@ export async function createCommunityRouter(db: Db, options: Options) {
+   const messages = db.collection<Entry>('messages');
+   const files = db.collection<FileRecord>('files');
+   const reports = db.collection<Report>('reports');
++  const friends = db.collection<Friendship>('friendships');
++  const blocks = db.collection<Block>('blocks');
++  const direct = db.collection<Entry>('directMessages');
++  const safetyReports = db.collection<SafetyReport>('safetyReports');
+   const storage = db.collection<{ _id: string; used: number }>('storage');
+   const limit = options.storageLimit ?? STORAGE_LIMIT;
+   const directory = options.directory ? resolve(options.directory) : null;
+@@ -45,6 +53,9 @@ export async function createCommunityRouter(db: Db, options: Options) {
+     comments.createIndex({ parentId: 1, created: -1 }),
+     messages.createIndex({ parentId: 1, created: -1 }),
+     files.createIndex({ postId: 1 }),
++    friends.createIndex({ members: 1 }),
++    blocks.createIndex({ ownerId: 1, targetId: 1 }, { unique: true }),
++    direct.createIndex({ parentId: 1, created: -1 }),
+   ]);
+   await storage.updateOne({ _id: 'files' }, { $setOnInsert: { used: 0 } }, { upsert: true });
+   const attempts = new Map<string, { count: number; expires: number }>();
+@@ -71,12 +82,23 @@ export async function createCommunityRouter(db: Db, options: Options) {
+   });
+   const user = (res: Response): User => res.locals.user ?? fail(401, 'Sign in to continue.');
+   const isModerator = (u: User | null) => !!u && !!options.moderator && u.username === options.moderator.toLowerCase();
++  const pair = (a: string, b: string) => [a, b].sort().join(':');
++  async function hiddenIds(u: User | null) {
++    if (!u) return [];
++    return (await blocks.find({ $or: [{ ownerId: u._id }, { targetId: u._id }] }).toArray()).map(b => b.ownerId === u._id ? b.targetId : b.ownerId);
++  }
++  async function allowed(a: string, b: string) {
++    if (a === b) fail(400, 'Choose another user.');
++    if (await blocks.findOne({ $or: [{ ownerId: a, targetId: b }, { ownerId: b, targetId: a }] })) fail(403, 'This interaction is unavailable.');
++  }
++  async function target(id: string) { return await users.findOne({ _id: id }) || fail(404, 'User not found.'); }
+   async function member(groupId: string, u: User | null) {
+     const group = u && await groups.findOne({ _id: groupId, members: u._id });
+     return group || fail(404, 'Group not found or you are not a member.');
+   }
+   async function visiblePost(id: string, u: User | null) {
+     const post = await posts.findOne({ _id: id, deleted: false });
++    if (post && (await hiddenIds(u)).includes(post.authorId)) fail(404, 'Post not found.');
+     if (!post || (post.draft && post.authorId !== u?._id)) fail(404, 'Post not found.');
+     if (post.groupId) await member(post.groupId, u);
+     return post;
+@@ -161,6 +183,7 @@ export async function createCommunityRouter(db: Db, options: Options) {
+     if (group.ownerId !== u._id) fail(403, 'Only the group owner can invite members.');
+     const target = await users.findOne({ username: text(req.body?.username, 30).toLowerCase() });
+     if (!target) fail(404, 'No account has that username. Ask them to sign up first.');
++    await allowed(u._id, target._id);
+     if (group.members.includes(target._id)) fail(409, 'That person is already a member.');
+     await groups.updateOne({ _id: group._id }, { $addToSet: { invited: target._id } }); res.json({ ok: true });
+   });
+@@ -185,7 +208,7 @@ export async function createCommunityRouter(db: Db, options: Options) {
+   router.get('/posts', async (req, res) => {
+     const groupId = typeof req.query.groupId === 'string' && req.query.groupId ? req.query.groupId : null;
+     if (groupId) await member(groupId, res.locals.user);
+-    const found = await posts.find({ groupId, draft: false, deleted: false }).sort({ created: -1 }).limit(50).toArray();
++    const found = await posts.find({ groupId, draft: false, deleted: false, authorId: { $nin: await hiddenIds(res.locals.user) } }).sort({ created: -1 }).limit(50).toArray();
+     res.json(await Promise.all(found.map(post => view(post, res.locals.user))));
+   });
+   router.post('/posts', async (req, res) => {
+@@ -209,7 +232,7 @@ export async function createCommunityRouter(db: Db, options: Options) {
+   }));
+   router.get('/posts/:id/comments', async (req, res) => {
+     const post = await visiblePost(String(req.params.id), res.locals.user);
+-    res.json((await comments.find({ parentId: post._id }).sort({ created: -1 }).limit(100).toArray()).reverse());
++    res.json((await comments.find({ parentId: post._id, authorId: { $nin: await hiddenIds(res.locals.user) } }).sort({ created: -1 }).limit(100).toArray()).reverse());
+   });
+   router.post('/posts/:id/comments', async (req, res) => {
+     const u = user(res); const post = await visiblePost(String(req.params.id), u);
+@@ -227,7 +250,7 @@ export async function createCommunityRouter(db: Db, options: Options) {
+   });
+   router.get('/groups/:id/messages', async (req, res) => {
+     const group = await member(String(req.params.id), user(res));
+-    res.json((await messages.find({ parentId: group._id }).sort({ created: -1 }).limit(100).toArray()).reverse());
++    res.json((await messages.find({ parentId: group._id, authorId: { $nin: await hiddenIds(user(res)) } }).sort({ created: -1 }).limit(100).toArray()).reverse());
+   });
+   router.post('/groups/:id/messages', async (req, res) => {
+     const u = user(res); const group = await member(String(req.params.id), u);
+@@ -242,6 +265,108 @@ export async function createCommunityRouter(db: Db, options: Options) {
+     await messages.deleteOne({ _id: entry._id }); res.json({ ok: true });
+   });
+ 
++  router.get('/people', async (req, res) => {
++    const u = user(res); const query = text(req.query.q ?? '', 30, false).toLowerCase();
++    if (query.length < 3) { res.json([]); return; }
++    const excluded = [u._id, ...await hiddenIds(u)];
++    // Usernames contain only letters, numbers and underscores; reject regex syntax.
++    if (!/^[a-z0-9_]+$/.test(query)) fail(400, 'Search using letters, numbers, or underscores.');
++    res.json(await users.find({ username: { $regex: '^' + query }, _id: { $nin: excluded } }, { projection: { _id: 1, username: 1 } }).limit(30).toArray());
++  });
++  router.get('/friends', async (_req, res) => {
++    const u = user(res);
++    const rows = await friends.find({ members: u._id }).toArray();
++    res.json(await Promise.all(rows.map(async row => {
++      const other = await target(row.members.find(id => id !== u._id)!);
++      return { _id: other._id, username: other.username, accepted: row.accepted, incoming: row.senderId !== u._id };
++    })));
++  });
++  router.post('/friends/:userId', async (req, res) => {
++    const u = user(res); const other = await target(String(req.params.userId)); await allowed(u._id, other._id);
++    const id = pair(u._id, other._id);
++    const existing = await friends.findOne({ _id: id });
++    if (existing) fail(409, 'A friendship or request already exists.');
++    try { await friends.insertOne({ _id: id, members: [u._id, other._id], senderId: u._id, accepted: false }); }
++    catch (e) { if ((e as { code?: number }).code === 11000) fail(409, 'A request already exists.'); throw e; }
++    res.status(201).json({ ok: true });
++  });
++  router.post('/friends/:userId/accept', async (req, res) => {
++    const u = user(res); const id = String(req.params.userId); await allowed(u._id, id);
++    const result = await friends.updateOne({ _id: pair(u._id, id), senderId: id, accepted: false }, { $set: { accepted: true } });
++    if (!result.matchedCount) fail(404, 'Friend request not found.');
++    res.json({ ok: true });
++  });
++  router.delete('/friends/:userId', async (req, res) => {
++    const u = user(res); await friends.deleteOne({ _id: pair(u._id, String(req.params.userId)) }); res.json({ ok: true });
++  });
++  router.get('/blocks', async (_req, res) => {
++    const u = user(res); const rows = await blocks.find({ ownerId: u._id }).toArray();
++    res.json(await Promise.all(rows.map(async row => { const other = await target(row.targetId); return { _id: other._id, username: other.username }; })));
++  });
++  router.post('/blocks/:userId', async (req, res) => {
++    const u = user(res); const other = await target(String(req.params.userId));
++    if (u._id === other._id) fail(400, 'You cannot block yourself.');
++    await blocks.updateOne({ ownerId: u._id, targetId: other._id }, { $setOnInsert: { _id: pair(u._id, other._id) + ':' + u._id, ownerId: u._id, targetId: other._id } }, { upsert: true });
++    await friends.deleteOne({ _id: pair(u._id, other._id) });
++    await groups.updateMany({ ownerId: other._id }, { $pull: { invited: u._id } });
++    await groups.updateMany({ ownerId: u._id }, { $pull: { invited: other._id } });
++    res.json({ ok: true });
++  });
++  router.delete('/blocks/:userId', async (req, res) => {
++    await blocks.deleteOne({ ownerId: user(res)._id, targetId: String(req.params.userId) }); res.json({ ok: true });
++  });
++  async function conversation(res: Response, id: string) {
++    const u = user(res); await target(id); await allowed(u._id, id);
++    if (!await friends.findOne({ _id: pair(u._id, id), accepted: true })) fail(403, 'Accept a friend request before messaging.');
++    return { u, id: pair(u._id, id) };
++  }
++  router.get('/direct/:userId', async (req, res) => {
++    const c = await conversation(res, String(req.params.userId));
++    const before = typeof req.query.before === 'string' ? new Date(req.query.before) : null;
++    if (before && !Number.isFinite(before.getTime())) fail(400, 'Invalid message cursor.');
++    res.json((await direct.find({ parentId: c.id, ...(before ? { created: { $lt: before } } : {}) }).sort({ created: -1, _id: -1 }).limit(100).toArray()).reverse());
++  });
++  router.post('/direct/:userId', async (req, res) => {
++    const c = await conversation(res, String(req.params.userId));
++    const entry: Entry = { _id: randomUUID(), parentId: c.id, authorId: c.u._id, author: c.u.username, text: text(req.body?.text, 4000), created: new Date() };
++    await direct.insertOne(entry); res.status(201).json(entry);
++  });
++  router.delete('/direct/:userId/:messageId', async (req, res) => {
++    const u = user(res);
++    const result = await direct.deleteOne({ _id: String(req.params.messageId), parentId: pair(u._id, String(req.params.userId)), authorId: u._id });
++    if (!result.deletedCount) fail(404, 'Your message was not found.'); res.json({ ok: true });
++  });
++  router.post('/safety-reports', async (req, res) => {
++    const u = user(res); const kind = req.body?.kind; const id = text(req.body?.targetId, 100);
++    let evidence = ''; let targetUserId = id;
++    if (kind === 'user') { const other = await target(id); evidence = other.username; }
++    else if (kind === 'direct' || kind === 'group') {
++      const entry = await (kind === 'direct' ? direct : messages).findOne({ _id: id });
++      if (!entry) fail(404, 'Message not found.');
++      if (kind === 'direct' && !entry.parentId.split(':').includes(u._id)) fail(404, 'Message not found.');
++      if (kind === 'group') await member(entry.parentId, u);
++      evidence = entry.author + ': ' + entry.text; targetUserId = entry.authorId;
++    } else fail(400, 'Choose a user or message to report.');
++    if (targetUserId === u._id) fail(400, 'You cannot report yourself.');
++    if (await safetyReports.findOne({ reporterId: u._id, kind, targetId: id, resolved: false })) fail(409, 'This report is already awaiting review.');
++    await safetyReports.insertOne({ _id: randomUUID(), reporterId: u._id, kind, targetId: id, targetUserId, evidence, reason: text(req.body?.reason, 2000), created: new Date(), resolved: false });
++    res.status(201).json({ ok: true });
++  });
++  router.get('/safety-reports', async (_req, res) => {
++    if (!isModerator(user(res))) fail(403, 'Only the configured moderator can review reports.');
++    res.json(await safetyReports.find({ resolved: false }).sort({ created: 1 }).limit(100).toArray());
++  });
++  router.post('/safety-reports/:id/resolve', async (req, res) => {
++    if (!isModerator(user(res))) fail(403, 'Only the configured moderator can review reports.');
++    const report = await safetyReports.findOne({ _id: String(req.params.id), resolved: false });
++    if (!report) fail(404, 'Report not found.');
++    if (req.body?.remove === true) {
++      if (report.kind === 'user') fail(400, 'User reports can be reviewed and dismissed; account suspension is not available yet.');
++      await (report.kind === 'direct' ? direct : messages).deleteOne({ _id: report.targetId });
++    }
++    await safetyReports.updateOne({ _id: report._id }, { $set: { resolved: true } }); res.json({ ok: true });
++  });
++
+   router.post('/posts/:id/report', async (req, res) => {
+     const u = user(res); const post = await visiblePost(String(req.params.id), u);
+     if (post.groupId || post.draft) fail(400, 'Use reporting for published public posts.');
+@@ -256,7 +381,7 @@ export async function createCommunityRouter(db: Db, options: Options) {
+     res.json(await Promise.all(found.map(async report => {
+       const post = await posts.findOne({ _id: report.postId, groupId: null, deleted: false });
+       return { ...report, post: post ? await view(post, res.locals.user) : null,
+-        comments: post ? await comments.find({ parentId: post._id }).sort({ created: -1 }).limit(100).toArray() : [] };
++        comments: post ? await comments.find({ parentId: post._id, authorId: { $nin: await hiddenIds(res.locals.user) } }).sort({ created: -1 }).limit(100).toArray() : [] };
+     })));
+   });
+   router.post('/reports/:id/resolve', async (req, res) => {
+@@ -274,7 +399,6 @@ export async function createCommunityRouter(db: Db, options: Options) {
+     const u = user(res); const post = await visiblePost(String(req.params.id), u);
+     if (!directory) fail(503, 'File storage is not configured on this server.');
+     if (post.authorId !== u._id || !post.draft) fail(403, 'Files can only be added to your own unpublished post.');
+-    if (await files.countDocuments({ postId: post._id }) >= 10) fail(400, 'Attach up to 10 files per post.');
+     let name: string;
+     try { name = decodeURIComponent(req.get('X-File-Name') ?? ''); } catch { fail(400, 'Invalid filename.'); }
+     name = text(name, 200).replace(/[\\/\x00-\x1f\x7f]/g, '_');
+@@ -282,7 +406,7 @@ export async function createCommunityRouter(db: Db, options: Options) {
+     const size = Number(req.get('Content-Length'));
+     if (!Number.isSafeInteger(size) || size <= 0) fail(400, 'The file must have a known, nonzero size.');
+     if (size > fileLimit(name, declaredType)) fail(413, 'File too large: photos allow 100 MB, videos 500 MB, and other files 1 GB.');
+-    const reserved = await storage.findOneAndUpdate({ _id: 'files', used: { $lte: limit - size } }, { $inc: { used: size } });
++    const reserved = await storage.findOneAndUpdate({ _id: 'files', ...(limit === null ? {} : { used: { $lte: limit - size } }) }, { $inc: { used: size } });
+     if (!reserved) fail(413, 'Storage is full. Delete files from existing posts before uploading more.');
+     const record: FileRecord = { _id: randomUUID(), postId: post._id, name, size, preview: null, ready: false, created: new Date() };
+     let saved = false;
+diff --git a/apps/backend/tests/community.integration.test.ts b/apps/backend/tests/community.integration.test.ts
+index bcd76b7..8b52ec8 100644
+--- a/apps/backend/tests/community.integration.test.ts
++++ b/apps/backend/tests/community.integration.test.ts
+@@ -133,6 +133,61 @@ test('community persistence, authorization, uploads, recovery, and moderation',
+   await request(`/posts/${failedDraft._id}`, 'owner', 'DELETE');
+   await request(`/posts/${secondDraft._id}`, 'owner', 'DELETE');
+   assert.equal((await request('/session', 'owner')).storageUsed, 0);
++  // Social authorization: friendship acceptance, private DMs, moderation, and blocking.
++  const outsider = (await request('/session', 'outsider')).user;
++  await request('/friends', '', 'GET', undefined, 401);
++  assert.equal((await request('/people?q=mem', 'owner'))[0]._id, member.id);
++  await request('/people?q=.*x', 'owner', 'GET', undefined, 400);
++  await request(`/friends/${owner.id}`, 'owner', 'POST', {}, 400);
++  await request(`/direct/${member.id}`, 'owner', 'POST', { text: 'Too early' }, 403);
++  await request(`/friends/${member.id}`, 'owner', 'POST', {}, 201);
++  await request(`/friends/${member.id}/accept`, 'owner', 'POST', {}, 404);
++  await request(`/friends/${owner.id}/accept`, 'member', 'POST', {});
++  const dm = await request(`/direct/${member.id}`, 'owner', 'POST', { text: 'Private message' }, 201);
++  assert.equal((await request(`/direct/${owner.id}`, 'member'))[0]._id, dm._id);
++  await request(`/direct/${owner.id}`, 'outsider', 'GET', undefined, 403);
++  await request(`/direct/${owner.id}/${dm._id}`, 'member', 'DELETE', undefined, 404);
++  await request('/safety-reports', 'outsider', 'POST', { kind: 'direct', targetId: dm._id, reason: 'Not my conversation' }, 404);
++  await request('/safety-reports', 'member', 'POST', { kind: 'direct', targetId: dm._id, reason: 'Review this message' }, 201);
++  await request('/safety-reports', 'member', 'GET', undefined, 403);
++  const dmReport = (await request('/safety-reports', 'owner'))[0];
++  assert.match(dmReport.evidence, /Private message/);
++  await request(`/safety-reports/${dmReport._id}/resolve`, 'owner', 'POST', { remove: true });
++  assert.equal((await request(`/direct/${owner.id}`, 'member')).length, 0);
++  const shared = await request('/posts', 'member', 'POST', { text: 'Block visibility' }, 201);
++  await request(`/posts/${shared._id}/files`, 'member', 'POST', Buffer.from('sheet'), 201, { 'X-File-Name': 'character.json' });
++  await request(`/posts/${shared._id}/publish`, 'member', 'POST', {});
++  const publicFile = (await request('/posts', 'owner'))[0].files[0];
++  await request(`/blocks/${member.id}`, 'owner', 'POST', {});
++  assert.equal((await request('/friends', 'owner')).length, 0);
++  assert.equal((await request('/blocks', 'owner'))[0]._id, member.id);
++  assert.equal((await request('/posts', 'owner')).length, 0);
++  await request(`/files/${publicFile._id}`, 'owner', 'GET', undefined, 404);
++  await request(`/direct/${owner.id}`, 'member', 'POST', { text: 'Blocked' }, 403);
++  await request(`/friends/${owner.id}`, 'member', 'POST', {}, 403);
++  await request(`/groups/${group._id}/invitations`, 'owner', 'POST', { username: 'member' }, 403);
++  await request('/safety-reports', 'owner', 'POST', { kind: 'user', targetId: member.id, reason: 'User report' }, 201);
++  await request(`/blocks/${member.id}`, 'owner', 'DELETE');
++  assert.equal((await request('/friends', 'owner')).length, 0);
++  await request(`/posts/${shared._id}`, 'member', 'DELETE');
++  // Default storage is expandable and posts can contain more than ten files.
++  const uncapped = express(); uncapped.use(express.json());
++  uncapped.use('/api/community', await createCommunityRouter(db, { directory }));
++  const unlimitedServer = uncapped.listen(0, '127.0.0.1');
++  await new Promise<void>(resolve => unlimitedServer.once('listening', resolve));
++  t.after(() => { unlimitedServer.closeAllConnections(); unlimitedServer.close(); });
++  const unlimitedAddress = unlimitedServer.address(); assert.ok(unlimitedAddress && typeof unlimitedAddress !== 'string');
++  const unlimitedUrl = `http://127.0.0.1:${unlimitedAddress.port}/api/community`;
++  const uncappedRequest = async (path: string, method = 'GET', body?: Buffer | string, extra = {}) => {
++    const response = await fetch(unlimitedUrl + path, { method, headers: { Cookie: cookies.owner, 'X-Oathkeeper-Request': '1', 'Content-Type': body instanceof Buffer ? 'application/octet-stream' : 'application/json', ...extra }, body });
++    assert.ok(response.ok, await response.clone().text()); return response.json();
++  };
++  assert.equal((await uncappedRequest('/session')).storageLimit, null);
++  const manyFiles = await uncappedRequest('/posts', 'POST', JSON.stringify({ text: 'Maps and sheets' }));
++  for (let i = 0; i < 11; i++) await uncappedRequest(`/posts/${manyFiles._id}/files`, 'POST', Buffer.alloc(20), { 'X-File-Name': `map-${i}.json` });
++  assert.equal((await uncappedRequest('/session')).storageUsed, 220);
++  await uncappedRequest(`/posts/${manyFiles._id}/publish`, 'POST', '{}');
++  assert.equal((await uncappedRequest('/posts'))[0].files.length, 11);
+   await request('/logout', 'owner', 'POST', {});
+   assert.equal((await request('/session', 'owner')).user, null);
+   await request('/login', 'owner', 'POST', { username: 'owner', password: 'a secure test password' });
+diff --git a/apps/backend/tests/policy.test.ts b/apps/backend/tests/policy.test.ts
+index bcbd703..2db6d8a 100644
+--- a/apps/backend/tests/policy.test.ts
++++ b/apps/backend/tests/policy.test.ts
+@@ -9,7 +9,7 @@ test('agreed decimal file and storage limits, including disguised extensions', (
+   assert.equal(fileLimit('clip.bin', 'video/webm'), 500_000_000);
+   assert.equal(fileLimit('sheet.pdf', 'application/pdf'), 1_000_000_000);
+   assert.equal(fileLimit('archive.zip', ''), 1_000_000_000);
+-  assert.equal(STORAGE_LIMIT, 5_000_000_000);
++  assert.equal(STORAGE_LIMIT, null);
+ });
+ test('inline previews use content signatures and exclude executable HTML and SVG', () => {
+   assert.equal(previewType(Buffer.from('<svg onload="alert(1)">')), null);
+diff --git a/apps/frontend/app/community/community.tsx b/apps/frontend/app/community/community.tsx
+index a1330dd..a181a31 100644
+--- a/apps/frontend/app/community/community.tsx
++++ b/apps/frontend/app/community/community.tsx
+@@ -1,14 +1,15 @@
++import { Friends, SafetyQueue } from './social';
+ import { useCallback, useEffect, useRef, useState } from 'react';
+ 
+ type User = { id: string; username: string; moderator: boolean };
+-type Session = { user: User | null; uploadsEnabled: boolean; storageLimit: number; storageUsed: number };
++type Session = { user: User | null; uploadsEnabled: boolean; storageLimit: number | null; storageUsed: number };
+ type Group = { _id: string; name: string; ownerId: string; members: string[] };
+ type Attachment = { _id: string; name: string; size: number; preview: string | null };
+ type Post = { _id: string; authorId: string; author: string; text: string; created: string; groupId: string | null; files: Attachment[]; canDelete: boolean };
+ type Entry = { _id: string; authorId: string; author: string; text: string; created: string };
+ const base = '/api/community';
+ 
+-async function api<T = { ok: boolean }>(path: string, method = 'GET', body?: unknown): Promise<T> {
++export async function api<T = { ok: boolean }>(path: string, method = 'GET', body?: unknown): Promise<T> {
+   let response: Response;
+   try { response = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', 'X-Oathkeeper-Request': '1' }, body: body === undefined ? undefined : JSON.stringify(body) }); }
+   catch { throw new Error('Cannot reach Oathkeeper. Check that the local server is running.'); }
+@@ -77,6 +78,7 @@ export function Community() {
+           </form><p className="hint">Keep your password safe. Password recovery is not available in this first version.</p>
+         </>}
+       </section>
++      {session.user && <Friends key={session.user.id} userId={session.user.id} />}
+       <div className="community-controls panel">
+         <label>Where would you like to share?<select value={scope} onChange={event => setScope(event.target.value)}><option value="">Public community</option>{groups.map(group => <option key={group._id} value={group._id}>{group.name} · Private</option>)}</select></label>
+         {session.user && <>
+@@ -86,7 +88,7 @@ export function Community() {
+       </div>
+       {group && session.user && <GroupMembers key={group._id} group={group} user={session.user} />}
+       <CommunitySpace key={`${session.user?.id ?? 'guest'}:${scope}`} session={session} group={group} onStorageChange={() => void refresh().catch(error => setError(errorText(error)))} />
+-      {session.user?.moderator && <ReportQueue />}
++      {session.user?.moderator && <><ReportQueue /><SafetyQueue /></>}
+     </>}
+   </>;
+ }
+@@ -149,9 +151,9 @@ function CommunitySpace({ session, group, onStorageChange }: { session: Session;
+     {session.user && <div className="panel"><p className="eyebrow">{group ? 'PRIVATE GROUP' : 'PUBLIC COMMUNITY'}</p><h2>Share an adventure</h2>
+       <form onSubmit={event => { event.preventDefault(); void publish(); }}>
+         <label>Post text<textarea rows={4} maxLength={10000} disabled={busy} value={text} onChange={event => setText(event.target.value)} placeholder="A memorable moment, a map, or a recap…" /></label>
+-        <label className="file-picker">Attach photos, videos, or files<input ref={fileInput} type="file" multiple disabled={busy || !session.uploadsEnabled} onChange={event => { const selected = Array.from(event.target.files ?? []); if (selected.length > 10) { setError('Choose up to 10 files per post.'); event.target.value = ''; setFiles([]); } else { setFiles(selected); setError(''); } }} /></label>
+-        <p className="hint">Per file: photos 100 MB · videos 500 MB · other files 1 GB. Up to 10 files per post. Files remain until the post is deleted.</p>
+-        <p className="hint">App storage: {(session.storageUsed / 1e9).toFixed(2)} / {(session.storageLimit / 1e9).toFixed(0)} GB. Uploads pause when full.</p>
++        <label className="file-picker">Attach images, videos, maps, character sheets, or files<input ref={fileInput} type="file" multiple disabled={busy || !session.uploadsEnabled} onChange={event => { setFiles(Array.from(event.target.files ?? [])); setError(''); }} /></label>
++        <p className="hint">Per file: photos 100 MB · videos 500 MB · other files 1 GB. No fixed file count limit. Files remain until the post is deleted.</p>
++        <p className="hint">App storage: {(session.storageUsed / 1e9).toFixed(2)} GB used{session.storageLimit === null ? ' · Expandable storage, no fixed total cap.' : ` / ${(session.storageLimit / 1e9).toFixed(0)} GB. Uploads pause when full.`}</p>
+         {!session.uploadsEnabled && <p className="notice">File storage is not connected on this server yet. Text posts and messages are available.</p>}
+         <ul className="member-list">{files.map((file, index) => <li key={`${file.name}:${index}`}>{file.name} · {(file.size / 1e6).toFixed(2)} MB <button type="button" disabled={busy} onClick={() => setFiles(current => current.filter((_, i) => i !== index))}>Remove</button></li>)}</ul>
+         <button className="primary" disabled={busy || (!text.trim() && !files.length)}>{busy ? 'Publishing…' : group ? 'Post to group' : 'Post publicly'}</button>
+@@ -191,7 +193,7 @@ function Chat({ group, user }: { group: Group; user: User }) {
+   useEffect(() => { let active = true; let loading = false; const load = async () => { if (loading) return; loading = true; try { const entries = await api<Entry[]>(`/groups/${group._id}/messages`); if (active) { setMessages(entries); setError(''); } } catch (error) { if (active) { setMessages([]); setError(errorText(error)); } } finally { loading = false; } }; void load(); const timer = window.setInterval(() => void load(), 3000); return () => { active = false; window.clearInterval(timer); }; }, [group._id]);
+   useEffect(() => { const element = log.current; if (element) element.scrollTop = element.scrollHeight; }, [messages.length]);
+   return <><p className="eyebrow">AROUND THE TABLE</p><h2>Group messages</h2><p className="hint">Only members of {group.name} · Latest 100 messages · Updates every 3 seconds.</p>
+-    <div ref={log} className="message-log" role="log" aria-label="Group conversation">{!messages.length && <p>No messages yet. Start the conversation.</p>}{messages.map(entry => <div className="message-bubble" key={entry._id}><strong>{entry.author}</strong><p className="hint">{date(entry.created)}</p><p className="post-text">{entry.text}</p>{(entry.authorId === user.id || group.ownerId === user.id) && <button disabled={busy} onClick={async () => { setBusy(true); try { await api(`/groups/${group._id}/messages/${entry._id}`, 'DELETE'); await refresh(); } catch (error) { setError(errorText(error)); } finally { setBusy(false); } }}>Delete message</button>}</div>)}</div>
++    <div ref={log} className="message-log" role="log" aria-label="Group conversation">{!messages.length && <p>No messages yet. Start the conversation.</p>}{messages.map(entry => <div className="message-bubble" key={entry._id}><strong>{entry.author}</strong><p className="hint">{date(entry.created)}</p><p className="post-text">{entry.text}</p>{entry.authorId !== user.id && <SafetyReportButton kind="group" targetId={entry._id} />}{(entry.authorId === user.id || group.ownerId === user.id) && <button disabled={busy} onClick={async () => { setBusy(true); try { await api(`/groups/${group._id}/messages/${entry._id}`, 'DELETE'); await refresh(); } catch (error) { setError(errorText(error)); } finally { setBusy(false); } }}>Delete message</button>}</div>)}</div>
+     <form onSubmit={async event => { event.preventDefault(); setBusy(true); setError(''); try { await api(`/groups/${group._id}/messages`, 'POST', { text }); setText(''); await refresh(); } catch (error) { setError(errorText(error)); } finally { setBusy(false); } }}><label>Message<textarea rows={3} required maxLength={4000} disabled={busy} value={text} onChange={event => setText(event.target.value)} /></label><button className="primary" disabled={busy || !text.trim()}>{busy ? 'Sending…' : 'Send message'}</button></form>
+     {error && <p role="alert" className="notice">{error}</p>}
+   </>;
+@@ -204,3 +206,8 @@ function ReportQueue() {
+   useEffect(() => { void refresh(); }, [refresh]);
+   return <section className="panel"><h2>Public reports</h2><button disabled={busy} onClick={() => void refresh()}>Refresh reports</button>{!reports.length && <p>No open reports.</p>}{reports.map(report => <div className="report" key={report._id}><p className="post-text"><strong>Reason:</strong> {report.reason}</p><p className="post-text">{report.post?.text ?? 'Post no longer available.'}</p><div className="attachment-grid">{report.post?.files.map(file => <AttachmentView key={file._id} file={file} />)}</div><details><summary>Review comments</summary>{report.comments.map(comment => <p className="post-text" key={comment._id}><strong>{comment.author}:</strong> {comment.text}</p>)}</details><p className="hint">Post ID: {report.postId}</p>{[false, true].map(remove => <button key={String(remove)} disabled={busy} onClick={async () => { if (remove && !window.confirm('Remove the reported post, comments, and files?')) return; setBusy(true); try { await api(`/reports/${report._id}/resolve`, 'POST', { remove }); await refresh(); setStatus(remove ? 'Reported content removed.' : 'Report dismissed.'); } catch (error) { setStatus(errorText(error)); } finally { setBusy(false); } }}>{remove ? 'Remove reported post' : 'Dismiss report'}</button>)}</div>)}<p role="status">{status}</p></section>;
+ }
++
++export function SafetyReportButton({ kind, targetId }: { kind: 'user' | 'direct' | 'group'; targetId: string }) {
++  const [open, setOpen] = useState(false), [reason, setReason] = useState(''), [status, setStatus] = useState(''), [busy, setBusy] = useState(false);
++  return <span><button type="button" onClick={() => setOpen(v => !v)}>Report {kind === 'user' ? 'user' : 'message'}</button>{open && <span className="report"><label>Reason for reporting<textarea required maxLength={2000} value={reason} onChange={e => setReason(e.target.value)} /></label><button type="button" disabled={busy || !reason.trim()} onClick={async () => { setBusy(true); try { await api('/safety-reports', 'POST', { kind, targetId, reason }); setOpen(false); setReason(''); setStatus('Report sent for review.'); } catch(e) { setStatus(errorText(e)); } finally { setBusy(false); } }}>Submit report</button></span>}<span role="status">{status}</span></span>;
++}
+diff --git a/apps/frontend/app/community/social.tsx b/apps/frontend/app/community/social.tsx
+new file mode 100644
+index 0000000..f2c7726
+--- /dev/null
++++ b/apps/frontend/app/community/social.tsx
+@@ -0,0 +1,45 @@
++import { useCallback, useEffect, useState } from 'react';
++import { api, SafetyReportButton } from './community';
++type Person = { _id: string; username: string; accepted?: boolean; incoming?: boolean };
++type Message = { _id: string; authorId: string; author: string; text: string; created: string };
++const errorText = (e: unknown) => e instanceof Error ? e.message : 'Please try again.';
++
++export function Friends({ userId }: { userId: string }) {
++  const [friends, setFriends] = useState<Person[]>([]), [blocks, setBlocks] = useState<Person[]>([]);
++  const [query, setQuery] = useState(''), [people, setPeople] = useState<Person[]>([]);
++  const [selected, setSelected] = useState<Person | null>(null), [status, setStatus] = useState(''), [busy, setBusy] = useState(false);
++  const refresh = useCallback(async () => {
++    const [f, b] = await Promise.all([api<Person[]>('/friends'), api<Person[]>('/blocks')]);
++    setFriends(f); setBlocks(b);
++    setSelected(current => current && f.some(p => p._id === current._id && p.accepted) ? current : null);
++  }, []);
++  useEffect(() => { let active = true; const load = () => refresh().catch(e => { if (active) setStatus(errorText(e)); }); void load(); const timer = setInterval(() => void load(), 5000); return () => { active = false; clearInterval(timer); }; }, [refresh]);
++  async function act(work: () => Promise<unknown>) { setBusy(true); setStatus(''); try { await work(); await refresh(); } catch(e) { setStatus(errorText(e)); } finally { setBusy(false); } }
++  const controls = (p: Person) => <><SafetyReportButton kind="user" targetId={p._id} /><button disabled={busy} onClick={() => { if (confirm(`Block ${p.username}? This removes your friendship, stops direct contact, and hides each other's content while signed in. Shared group membership stays unchanged.`)) void act(async () => { await api(`/blocks/${p._id}`, 'POST'); setPeople(current => current.filter(x => x._id !== p._id)); }); }}>Block</button></>;
++  return <section className="panel"><p className="eyebrow">YOUR ADVENTURING CIRCLE</p><h2>Friends & direct messages</h2><p>Find a username, send a friend request, and start a private conversation after they accept.</p>
++    <form className="inline-form" onSubmit={e => { e.preventDefault(); void act(async () => setPeople(await api<Person[]>(`/people?q=${encodeURIComponent(query)}`))); }}><label>Find people<input minLength={3} maxLength={30} required value={query} onChange={e => setQuery(e.target.value)} placeholder="At least 3 characters" /></label><button disabled={busy}>Search</button></form>
++    <ul className="member-list">{people.map(p => <li key={p._id}><strong>{p.username}</strong>{!friends.some(f => f._id === p._id) && <button disabled={busy} onClick={() => void act(() => api(`/friends/${p._id}`, 'POST'))}>Add friend</button>}{controls(p)}</li>)}</ul>
++    <h3>Your friends and requests</h3>{!friends.length && <p>No friends or requests yet.</p>}
++    <ul className="member-list">{friends.map(p => <li key={p._id}><strong>{p.username}</strong><span>{p.accepted ? 'Friend' : p.incoming ? 'Wants to be friends' : 'Request sent'}</span>{p.accepted ? <button onClick={() => setSelected(p)}>Message</button> : p.incoming && <button disabled={busy} onClick={() => void act(() => api(`/friends/${p._id}/accept`, 'POST'))}>Accept</button>}<button disabled={busy} onClick={() => void act(() => api(`/friends/${p._id}`, 'DELETE'))}>{p.accepted ? 'Remove friend' : p.incoming ? 'Decline' : 'Cancel request'}</button>{controls(p)}</li>)}</ul>
++    <details><summary>Blocked users ({blocks.length})</summary><p>Unblocking does not restore a friendship. Public content can still be viewed while signed out.</p>{blocks.map(p => <div className="actions" key={p._id}>{p.username}<button disabled={busy} onClick={() => void act(() => api(`/blocks/${p._id}`, 'DELETE'))}>Unblock</button></div>)}</details>
++    <p role="status">{status}</p>{selected && <DirectChat key={selected._id} person={selected} userId={userId} onClose={() => setSelected(null)} />}
++  </section>;
++}
++function DirectChat({ person, userId, onClose }: { person: Person; userId: string; onClose: () => void }) {
++  const [messages, setMessages] = useState<Message[]>([]), [text, setText] = useState(''), [status, setStatus] = useState(''), [busy, setBusy] = useState(false);
++  const path = `/direct/${person._id}`;
++  const refresh = useCallback(async () => setMessages(await api<Message[]>(path)), [path]);
++  useEffect(() => { let active = true; const load = async () => { try { const entries = await api<Message[]>(path); if (active) { setMessages(entries); setStatus(''); } } catch(e) { if (active) { setMessages([]); setStatus(errorText(e)); } } }; void load(); const timer = setInterval(() => void load(), 3000); return () => { active = false; clearInterval(timer); }; }, [path]);
++  return <section aria-label={`Conversation with ${person.username}`}><div className="workspace-heading"><h3>Conversation with {person.username}</h3><button onClick={onClose}>Close</button></div><p className="hint">Private between you two. A reported message and your reason are shared with the moderator. Latest 100 messages; refreshes every 3 seconds.</p>
++    <div className="message-log" role="log">{messages.map(m => <div className="message-bubble" key={m._id}><strong>{m.author}</strong><p className="hint">{new Date(m.created).toLocaleString()}</p><p className="post-text">{m.text}</p>{m.authorId !== userId ? <SafetyReportButton kind="direct" targetId={m._id} /> : <button disabled={busy} onClick={async () => { setBusy(true); try { await api(`${path}/${m._id}`, 'DELETE'); await refresh(); } catch(e) { setStatus(errorText(e)); } finally { setBusy(false); } }}>Delete message</button>}</div>)}</div>
++    <form onSubmit={async e => { e.preventDefault(); setBusy(true); try { await api(path, 'POST', { text }); setText(''); await refresh(); } catch(e) { setStatus(errorText(e)); } finally { setBusy(false); } }}><label>Direct message<textarea required maxLength={4000} disabled={busy} value={text} onChange={e => setText(e.target.value)} /></label><button disabled={busy || !text.trim()}>Send message</button></form><p role="status">{status}</p>
++  </section>;
++}
++
++export function SafetyQueue() {
++  type Report = { _id: string; kind: string; reason: string; evidence: string };
++  const [reports, setReports] = useState<Report[]>([]), [status, setStatus] = useState(''), [busy, setBusy] = useState(false);
++  const refresh = useCallback(async () => setReports(await api<Report[]>('/safety-reports')), []);
++  useEffect(() => { void refresh().catch(e => setStatus(errorText(e))); }, [refresh]);
++  return <section className="panel"><h2>User & message reports</h2><button onClick={() => void refresh().catch(e => setStatus(errorText(e)))}>Refresh</button>{!reports.length && <p>No open reports.</p>}{reports.map(r => <article className="report" key={r._id}><p>{r.kind} report</p><p className="post-text"><strong>Reason:</strong> {r.reason}</p><p className="post-text"><strong>Reported content:</strong> {r.evidence}</p>{[false, true].filter(remove => !remove || r.kind !== 'user').map(remove => <button key={String(remove)} disabled={busy} onClick={async () => { setBusy(true); try { await api(`/safety-reports/${r._id}/resolve`, 'POST', { remove }); await refresh(); } catch(e) { setStatus(errorText(e)); } finally { setBusy(false); } }}>{remove ? 'Remove message' : 'Dismiss report'}</button>)}{r.kind === 'user' && <p className="hint">Account suspension is not implemented yet. Users can block this account.</p>}</article>)}<p role="status">{status}</p></section>;
++}
+diff --git a/docs/community.md b/docs/community.md
+index 5103bf6..4f0d40e 100644
+--- a/docs/community.md
++++ b/docs/community.md
+@@ -48,8 +48,10 @@ Character worksheets still require downloading a save file.
+ 
+ - Photos: 100 MB; videos: 500 MB; PDFs and other files: 1 GB per file. Units are
+   decimal (1 MB = 1,000,000 bytes). Zero-byte files are rejected.
+-- Up to ten files per post. The app reserves capacity before receiving bytes,
+-  enforcing a 5 GB total cap even when uploads happen at the same time.
++- No fixed file count per post or total app storage quota. The app records
++  storage usage before receiving bytes and rolls it back after failed uploads.
++  Local testing remains limited by actual disk capacity. An optional finite
++  storageLimit remains supported by the router for operator policies and tests.
+ - Files are retained until their post is deleted. General files are served as
+   downloads; only recognized media are shown inline. This is not malware scanning.
+ - Upload failure/cancellation leaves the post unpublished. The UI tries to
+@@ -99,3 +101,33 @@ is implemented. Do not route large uploads through a memory-buffering service.
+ Production cookies require HTTPS. For testing a production build strictly on
+ localhost over HTTP, set `COOKIE_SECURE=false`; do not use that setting on a public
+ HTTP deployment. Back up MongoDB and the upload directory together.
++
++## Friends, blocking, and reports
++
++1. Sign in with two accounts in separate browser windows. Find the other username
++   under Friends & direct messages (at least three characters), send a request,
++   and accept it in the other window. Decline and cancel are available for pending
++   requests; accepted friends can be removed.
++2. Select Message beside an accepted friend. Direct messages are private between
++   those accounts, refresh every three seconds, and persist in MongoDB. Removing
++   a friend stops message access and sending; a later accepted friendship restores
++   the saved conversation. Authors can delete their own direct messages.
++3. Report a user from search/friends, or report a specific direct/group message.
++   The report stores a copy of that message as evidence even if it is deleted.
++   Only the configured moderator can review reports, dismiss them, or remove a
++   reported message. Account suspension and appeals are not implemented.
++4. Block the other user. The friendship is removed, pending group invitations
++   between those owners/users are withdrawn, and direct messages, friend requests,
++   and new group invitations are denied in either direction. Posts, comments, and
++   group messages from the other user are hidden when signed in, and attachment
++   links on their posts are denied. Existing shared group membership is unchanged.
++5. Unblock under Blocked users. Friendship is not restored automatically. Public
++   content is still public and may be read while signed out; blocking cannot
++   recall files already downloaded.
++
++General uploads include map files, PDFs, JSON character backups, images, videos,
++and other formats. Sharing a character file does not import it into a worksheet
++or enable account-based character storage. Preview support is unchanged.
++
++This build is for local review before service purchases. Cloud storage, public
++launch preparation, native mobile integration, and account recovery remain.
+diff --git a/docs/hosting.md b/docs/hosting.md
+index aad49f1..1a5c5c3 100644
+--- a/docs/hosting.md
++++ b/docs/hosting.md
+@@ -2,7 +2,9 @@
+ 
+ Researched November 9, 2026. The owner selected Render Free for app hosting.
+ MongoDB Atlas and Cloudflare R2 remain recommended supporting services.
+-This is not a deployed setup or a guarantee of a monthly bill below $10.
++These are historical recommendations, not a deployed setup. The owner now
++wants local app review before purchasing anything. The earlier $10 budget is
++superseded; review current pricing before any later paid activation.
+ 
+ ## Recommended starting services
+ 
+@@ -28,8 +30,9 @@ use multipart uploads so failed parts can be retried. This is planned work.
+ 
+ Ten 1 GB files kept for a full month would consume the entire free storage
+ allowance. File-size limits alone cannot keep the total bill within budget.
+-The owner approved a 5 GB total file-storage cap and pausing uploads when full.
+-This cap is enforced locally; it must also apply to future cloud storage.
++The owner replaced the previous 5 GB quota with expandable storage and no fixed
++count or total quota. The local adapter tracks usage but actual disk capacity
++still applies. Cloud storage is not connected; nothing is being purchased.
+ Budget alerts provide notifications, not a guaranteed spending ceiling.
+ [Cloudflare budget alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/).
+ 
+diff --git a/docs/roadmap.md b/docs/roadmap.md
+index afb3b95..ae15081 100644
+--- a/docs/roadmap.md
++++ b/docs/roadmap.md
+@@ -36,17 +36,16 @@ Approved by the owner on November 9, 2026. These rules are implemented in the lo
+ - Private groups are visible only to invited members. Group owners manage
+   invitations.
+ - Every group member may post and chat. Only the group owner can remove members.
+-- Messaging takes place within groups.
++- Messaging takes place within groups and between accepted friends.
+ - Authors can delete their own posts. Group owners can remove group content.
+ - Public content can be reported. The owner reviews reports through a configured
+   moderator account and can remove reported posts and their comments/files.
+ - Photos may be up to 100 MB each; videos may be up to 500 MB each.
+-  PDFs and other files may be up to 1 GB each. Total file storage is capped at 5 GB
+-  for the whole app; new uploads pause when full. Files stay until their post is
+-  deleted. These additional rules were approved on November 9, 2026.
+-- Total hosting budget: $0–$10 per month, preferring free services where feasible.
+-  Evaluate application hosting, database, file storage, and transfer costs within
+-  this total. The per-file limits do not imply unlimited total storage or traffic.
++  PDFs and other files may be up to 1 GB each. The owner subsequently replaced
++  the 5 GB total cap with expandable storage and no fixed upload count. Files
++  stay until their post is deleted; actual storage capacity still applies.
++- The earlier $0–$10 hosting budget is superseded. Build and review the app
++  locally before purchasing services; select and review paid hosting later.
+ 
+ ## Next development stages
+ 
+@@ -58,7 +57,7 @@ These stages are work divisions, not a reduction of launch scope.
+    adjustments with tests. Add 2014 Player's Handbook options only after
+    establishing permission for the specific included material.
+ 2. Agree character visibility and account behavior. Select hosting within the
+-   agreed $0–$10 monthly budget. Implement
++   future reviewed monthly budget. Implement
+    accounts and online storage with access checks and recovery behavior.
+ 3. Extend and harden the implemented community features for public launch,
+    including account recovery, moderation policy, and operational monitoring.
+@@ -81,3 +80,11 @@ These have not been decided or implemented:
+ - Expected initial audience, to help size hosting within the agreed budget.
+ 
+ Ask about each choice before implementing features that depend on it.
++
++## Added community scope
++
++Friend requests, acceptance/decline/cancel, friend removal, friend-only direct
++messages, blocking/unblocking, user and individual-message reports, and moderator
++message removal are implemented for local testing. Existing general uploads
++cover map files and character sheets. Native integration, cloud storage,
++moderator account suspension, and recovery remain planned work.
+-- 
+2.52.0
+
+
+From c7c96545b6a7d116e7145bfd94b65c1057bb40f5 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 19:32:58 -0600
+Subject: [PATCH 2/2] Support the mobile community entry point
+
+---
+ README.md                         | 6 ++++--
+ apps/frontend/app/routes/home.tsx | 1 +
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/README.md b/README.md
+index f9db280..8bd6abb 100644
+--- a/README.md
++++ b/README.md
+@@ -142,5 +142,7 @@ remain unconfigured and must be reviewed before activation.
+ This repository is the online app. `hwemp/Oathkeeper-App` is a separate native
+ Capacitor project with offline character tools, local PDF/text/JSON import,
+ inventory, powers, journal, and dice. Those native tools and its APK are not
+-updated by changes in this repository. Combining the mobile shell with the
+-online community remains separate integration work.
++updated by changes in this repository. The mobile test build now includes a Community tab that opens a configured
++HTTPS server in a secure browser window. `/?community=1` opens this app directly
++on Community. No server URL has been deployed or preconfigured; the APK alone
++does not provide a shared backend.
+diff --git a/apps/frontend/app/routes/home.tsx b/apps/frontend/app/routes/home.tsx
+index c1a3623..3479d65 100644
+--- a/apps/frontend/app/routes/home.tsx
++++ b/apps/frontend/app/routes/home.tsx
+@@ -25,6 +25,7 @@ export default function Home() {
+   const fileInput = useRef<HTMLInputElement>(null);
+   const review = useRef<HTMLDivElement>(null);
+   const results = calculate(character);
++  useEffect(() => { if (new URLSearchParams(window.location.search).get('community') === '1') setTab('community'); }, []);
+   useEffect(() => {
+     if (!dirty) return;
+     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+-- 
+2.52.0
+
