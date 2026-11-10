@@ -45,13 +45,18 @@ release. Develop them in manageable steps without silently reducing that scope.
   import remain planned work. Do not describe these as available features.
 - Community accounts, public posts/comments, invitation-only private groups,
   group messages, local uploads, and public reporting are implemented. Chat
-  currently refreshes every three seconds.
+  currently refreshes every three seconds. Friend requests/lists, friend-only
+  direct messaging, blocking, and user/group-message/direct-message reports are
+  implemented for local testing. Blocking hides content in both directions when
+  signed in and stops direct contact; shared group membership is unchanged.
 - Follow the documented community access rules: invitations require acceptance,
   group owners moderate private groups, and a server-designated moderator
   handles public reports. See `docs/community.md` for permissions and testing.
 - Recorded upload limits are 100 MB per photo, 500 MB per video, and 1 GB per
-  PDF/other file, with a 5 GB app-wide file-storage cap. Pause uploads when full;
-  preserve this cap when adding cloud storage.
+  PDF/other file. The owner superseded the 5 GB cap and $10 budget with
+  expandable storage and no fixed upload count or total app quota. Build and
+  review locally before purchasing anything; no paid services are authorized
+  for activation by this development request. Local disk capacity still applies.
 - The owner selected Render Free for app hosting. MongoDB Atlas and Cloudflare
   R2 are recommendations, not configured services. See `docs/hosting.md` for
   setup status and remaining owner steps. Deployment configuration exists, but

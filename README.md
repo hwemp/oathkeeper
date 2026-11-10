@@ -11,10 +11,11 @@ Download and restore JSON save files, with a review before replacing the current
 worksheet. Work lives only in the current tab until downloaded.
 
 The Community tab now provides accounts, public posts and comments, private
-invitation-only groups, group messages, uploads, and public reporting. Posts and
+invitation-only groups, group messages, uploads, friend requests and lists, private
+direct messages, blocking, and user/message reporting. Posts and
 messages persist in MongoDB. Development uploads persist in `.data/uploads`.
-Photos allow 100 MB, videos 500 MB, and PDFs/other files 1 GB each, with a 5 GB
-app-wide storage cap. Chat refreshes every three seconds.
+Photos allow 100 MB, videos 500 MB, and PDFs/other files 1 GB each. There is
+no fixed upload count or app-wide storage cap; physical disk capacity still applies. Chat refreshes every three seconds.
 
 Guided character creation/leveling, online character storage, and PDF character
 import are not implemented yet. Community accounts do not save character
@@ -34,7 +35,7 @@ Unit tests use Node's built-in test runner and require no database. They cover
 character calculations, save files, upload-limit policy, and deletion permissions.
 Community integration tests run against real MongoDB in an isolated temporary
 database, covering account sessions, access checks, uploads, quota recovery,
-comments, messages, and moderation. They delete only their own test database.
+comments, messages, friendships, blocking, private conversations, and moderation. They delete only their own test database.
 
 To try the worksheet without MongoDB, run
 `npm run dev --workspace=@oathkeeper/frontend` and open http://localhost:5173.
@@ -130,3 +131,18 @@ The driver setup follows the [MongoDB connection documentation](https://www.mong
 
 Configuration references: [Turborepo tasks](https://turborepo.dev/docs/crafting-your-repository/configuring-tasks)
 and [React Router custom servers](https://reactrouter.com/tutorials/quickstart).
+
+## Build before purchasing
+
+The owner requested local app review before purchasing services. No paid service
+is needed to develop or test this repository. The prior 5 GB total quota and
+$10 monthly budget are superseded by expandable storage; actual paid services
+remain unconfigured and must be reviewed before activation.
+
+This repository is the online app. `hwemp/Oathkeeper-App` is a separate native
+Capacitor project with offline character tools, local PDF/text/JSON import,
+inventory, powers, journal, and dice. Those native tools and its APK are not
+updated by changes in this repository. The mobile test build now includes a Community tab that opens a configured
+HTTPS server in a secure browser window. `/?community=1` opens this app directly
+on Community. No server URL has been deployed or preconfigured; the APK alone
+does not provide a shared backend.
