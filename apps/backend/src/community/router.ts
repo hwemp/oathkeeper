@@ -22,7 +22,7 @@ interface Post { _id: string; authorId: string; author: string; groupId: string 
 interface Entry { _id: string; authorId: string; author: string; text: string; created: Date; parentId: string }
 interface FileRecord { _id: string; postId: string; name: string; size: number; preview: string | null; ready: boolean; created: Date }
 interface Report { _id: string; postId: string; reporterId: string; reason: string; created: Date; resolved: boolean }
-interface Options { directory: string | null; secureCookies?: boolean; moderator?: string; storageLimit?: number }
+interface Options { directory: string | null; secureCookies?: boolean; moderator?: string; storageLimit?: number; platformOwnerId?: string; platformOwnerSecret?: string }
 
 interface Friendship { _id: string; members: string[]; senderId: string; accepted: boolean }
 interface Block { _id: string; ownerId: string; targetId: string }
@@ -43,6 +43,7 @@ export async function createCommunityRouter(db: Db, options: Options) {
   const direct = db.collection<Entry>('directMessages');
   const safetyReports = db.collection<SafetyReport>('safetyReports');
   const storage = db.collection<{ _id: string; used: number }>('storage');
+  const ownerAudit = db.collection<{ _id: string; actorId: string; groupId: string | null; action: string; reason: string; created: Date }>('platformOwnerAudit');
   const limit = options.storageLimit ?? STORAGE_LIMIT;
   const directory = options.directory ? resolve(options.directory) : null;
   if (directory) await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -82,6 +83,22 @@ export async function createCommunityRouter(db: Db, options: Options) {
   });
   const user = (res: Response): User => res.locals.user ?? fail(401, 'Sign in to continue.');
   const isModerator = (u: User | null) => !!u && !!options.moderator && u.username === options.moderator.toLowerCase();
+  // Administrative oversight requires BOTH an authenticated, explicitly configured user ID
+  // and a separate high-entropy server secret. No username-only or client-side bypass.
+  function requirePlatformOwner(req: Request, res: Response) {
+    const u = user(res);
+    const supplied = req.header('x-oathkeeper-owner-key') ?? '';
+    const expected = options.platformOwnerSecret ?? '';
+    if (!options.platformOwnerId || !expected || expected.length < 32 ||
+        u._id !== options.platformOwnerId || supplied.length !== expected.length ||
+        !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {
+      fail(403, 'Platform owner authorization required.');
+    }
+    return u;
+  }
+  async function auditOwner(actorId: string, groupId: string | null, action: string, reason: string) {
+    await ownerAudit.insertOne({ _id: randomUUID(), actorId, groupId, action, reason, created: new Date() });
+  }
   const pair = (a: string, b: string) => [a, b].sort().join(':');
   async function hiddenIds(u: User | null) {
     if (!u) return [];
@@ -167,6 +184,29 @@ export async function createCommunityRouter(db: Db, options: Options) {
     const token = (req.headers.cookie ?? '').split(';').map(part => part.trim()).find(part => part.startsWith('oathkeeper_session='))?.slice(19);
     if (token) await sessions.deleteOne({ _id: hash(token) });
     cookie(res, '', 0); res.json({ ok: true });
+  });
+
+
+  // Read-only oversight; never grants membership, reveals passwords, or enables direct contact.
+  router.get('/owner/groups', async (req, res) => {
+    const u = requirePlatformOwner(req, res);
+    const reason = text(req.header('x-oathkeeper-audit-reason') ?? '', 240);
+    const q = text(req.query.q ?? '', 80, false).toLowerCase();
+    const rows = await groups.find({}).toArray();
+    const matched = rows.filter(g => g.name.toLowerCase().includes(q)).slice(0, 100);
+    await auditOwner(u._id, null, 'list-groups', reason);
+    res.json(matched.map(g => ({ id: g._id, name: g.name, ownerId: g.ownerId, memberCount: g.members.length, visibility: 'private' })));
+  });
+  router.get('/owner/groups/:id', async (req, res) => {
+    const u = requirePlatformOwner(req, res);
+    const reason = text(req.header('x-oathkeeper-audit-reason') ?? '', 240);
+    const id = String(req.params.id);
+    const group = await groups.findOne({ _id: id });
+    if (!group) fail(404, 'Group not found.');
+    await auditOwner(u._id, id, 'review-group', reason);
+    res.json({ group: { id: group._id, name: group.name, ownerId: group.ownerId, memberCount: group.members.length },
+      posts: await posts.find({ groupId: id, deleted: false }).sort({ created: -1 }).limit(100).toArray(),
+      messages: await messages.find({ parentId: id }).sort({ created: -1 }).limit(100).toArray() });
   });
 
   router.get('/groups', async (_req, res) => {
