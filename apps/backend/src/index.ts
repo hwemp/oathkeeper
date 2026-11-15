@@ -25,6 +25,8 @@ try {
     directory: process.env.UPLOAD_DIR ?? (production ? null : fileURLToPath(new URL('../../../.data/uploads/', import.meta.url))),
     secureCookies: production && process.env.COOKIE_SECURE !== 'false',
     moderator: process.env.MODERATOR_USERNAME,
+    platformOwnerId: process.env.PLATFORM_OWNER_USER_ID,
+    platformOwnerSecret: process.env.PLATFORM_OWNER_SECRET,
   }));
 } catch {
   console.error('Could not initialize community storage. Check MongoDB and UPLOAD_DIR.');
