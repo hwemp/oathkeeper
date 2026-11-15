@@ -16,7 +16,8 @@ test('community persistence, authorization, uploads, recovery, and moderation', 
   const db = client.db(`oathkeeper_test_${randomUUID().replaceAll('-', '')}`);
   const directory = await mkdtemp(join(tmpdir(), 'oathkeeper-test-'));
   const app = express(); app.use(express.json({ limit: '32kb' }));
-  app.use('/api/community', await createCommunityRouter(db, { directory, moderator: 'owner', storageLimit: 100 }));
+  const ownerOptions = { directory, moderator: 'owner', storageLimit: 100, platformOwnerId: '', platformOwnerSecret: 'test-only-owner-secret-32-characters-long' };
+  app.use('/api/community', await createCommunityRouter(db, ownerOptions));
   const server = app.listen(0, '127.0.0.1'); await new Promise<void>(resolve => server.once('listening', resolve));
   const address = server.address(); assert.ok(address && typeof address !== 'string');
   const url = `http://127.0.0.1:${address.port}/api/community`;
@@ -33,6 +34,14 @@ test('community persistence, authorization, uploads, recovery, and moderation', 
   const owner = (await request('/session', 'owner')).user;
   const member = (await request('/session', 'member')).user;
   assert.equal(owner.moderator, true);
+  ownerOptions.platformOwnerId = owner.id;
+  const ownerHeaders = { 'x-oathkeeper-owner-key': ownerOptions.platformOwnerSecret, 'x-oathkeeper-audit-reason': 'Review reported group' };
+  await request('/owner/groups', 'outsider', 'GET', undefined, 403, ownerHeaders);
+  await request('/owner/groups', 'owner', 'GET', undefined, 403);
+  await request('/owner/groups', 'owner', 'GET', undefined, 403, { 'x-oathkeeper-owner-key': 'wrong', 'x-oathkeeper-audit-reason': 'Review' });
+  assert.deepEqual(await request('/owner/groups', 'owner', 'GET', undefined, 200, ownerHeaders), []);
+  assert.equal((await db.collection('platformOwnerAudit').countDocuments({ actorId: owner.id, action: 'list-groups' })), 1);
+
   assert.equal((await db.collection('users').findOne({ username: 'owner' }))?.password.includes('a secure'), false);
   await request('/register', 'outsider', 'POST', { username: 'owner', password: 'a secure test password' }, 409);
   await request('/login', 'nobody', 'POST', { username: 'owner', password: 'the wrong password' }, 401);
