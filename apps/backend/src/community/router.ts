@@ -15,14 +15,14 @@ function text(value: unknown, max: number, required = true) {
   if (typeof value !== 'string' || value.length > max || (required && !value.trim())) fail(400, 'Check the required fields and their lengths.');
   return value.trim();
 }
-interface User { _id: string; username: string; salt: string; password: string }
+interface User { _id: string; username: string; email?: string; salt: string; password: string; firstLoginNotifiedAt?: Date }
 interface Session { _id: string; userId: string; expires: Date }
 interface Group { _id: string; name: string; ownerId: string; members: string[]; invited: string[] }
 interface Post { _id: string; authorId: string; author: string; groupId: string | null; text: string; created: Date; draft: boolean; deleted: boolean }
 interface Entry { _id: string; authorId: string; author: string; text: string; created: Date; parentId: string }
 interface FileRecord { _id: string; postId: string; name: string; size: number; preview: string | null; ready: boolean; created: Date }
 interface Report { _id: string; postId: string; reporterId: string; reason: string; created: Date; resolved: boolean }
-interface Options { directory: string | null; secureCookies?: boolean; moderator?: string; storageLimit?: number; platformOwnerId?: string; platformOwnerSecret?: string }
+interface Options { directory: string | null; secureCookies?: boolean; moderator?: string; storageLimit?: number; platformOwnerId?: string; platformOwnerSecret?: string; securityNotificationWebhook?: string; securityNotificationToken?: string }
 
 interface Friendship { _id: string; members: string[]; senderId: string; accepted: boolean }
 interface Block { _id: string; ownerId: string; targetId: string }
@@ -44,12 +44,14 @@ export async function createCommunityRouter(db: Db, options: Options) {
   const safetyReports = db.collection<SafetyReport>('safetyReports');
   const storage = db.collection<{ _id: string; used: number }>('storage');
   const registrationSecurity = db.collection<{ _id: string; userId: string; ip: string; registeredAt: Date; expiresAt: Date }>('registrationSecurity');
+  const securityEvents = db.collection<{ _id: string; userId: string; event: string; at: Date; details: Record<string, string> }>('accountSecurityEvents');
   const ownerAudit = db.collection<{ _id: string; actorId: string; groupId: string | null; action: string; reason: string; created: Date }>('platformOwnerAudit');
   const limit = options.storageLimit ?? STORAGE_LIMIT;
   const directory = options.directory ? resolve(options.directory) : null;
   if (directory) await mkdir(directory, { recursive: true, mode: 0o700 });
   await Promise.all([
     users.createIndex({ username: 1 }, { unique: true }),
+    securityEvents.createIndex({ userId: 1, at: -1 }),
     registrationSecurity.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     sessions.createIndex({ expires: 1 }, { expireAfterSeconds: 0 }),
     posts.createIndex({ groupId: 1, created: -1 }),
@@ -100,6 +102,19 @@ export async function createCommunityRouter(db: Db, options: Options) {
   }
   async function auditOwner(actorId: string, groupId: string | null, action: string, reason: string) {
     await ownerAudit.insertOne({ _id: randomUUID(), actorId, groupId, action, reason, created: new Date() });
+  }
+  // Optional private notification relay: configure an HTTPS webhook with a server-side bearer token.
+  // The relay, not the mobile client, delivers mail to the configured owner inbox.
+  async function notifySecurity(event: string, account: User, details: Record<string, string>) {
+    await securityEvents.insertOne({ _id: randomUUID(), userId: account._id, event, at: new Date(), details });
+    if (!options.securityNotificationWebhook || !options.securityNotificationToken) return;
+    const url = new URL(options.securityNotificationWebhook);
+    if (url.protocol !== 'https:') return;
+    const subject = `Oathkeeper | ${event} | Username: ${account.username} | Email: ${account.email ?? 'not provided'}`;
+    try {
+      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${options.securityNotificationToken}` }, body: JSON.stringify({ to: 'Ecclesyus@gmail.com', subject, accountId: account._id, username: account.username, email: account.email ?? null, event, timestamp: new Date().toISOString(), details }), signal: AbortSignal.timeout(5000) });
+      if (!response.ok) console.error('Security notification relay rejected an event:', response.status);
+    } catch { console.error('Security notification relay unavailable; event retained in database.'); }
   }
   const pair = (a: string, b: string) => [a, b].sort().join(':');
   async function hiddenIds(u: User | null) {
@@ -165,24 +180,61 @@ export async function createCommunityRouter(db: Db, options: Options) {
     if (++attempt.count > 20) fail(429, 'Too many sign-in attempts. Wait a minute and try again.');
     const username = text(req.body?.username, 30).toLowerCase();
     const password = req.body?.password;
+    const suppliedEmail = req.body?.email;
+    const email = typeof suppliedEmail === 'string' ? suppliedEmail.trim().toLowerCase() : '';
+    if (mode === 'register' && email && (email.length > 254 || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))) fail(400, 'Enter a valid email address.');
     if (!/^[a-z0-9_]{3,30}$/.test(username)) fail(400, 'Use 3–30 letters, numbers, or underscores for your username.');
     if (typeof password !== 'string' || password.length < 12 || password.length > 128) fail(400, 'Use a password between 12 and 128 characters.');
     let u = await users.findOne({ username });
     if (mode === 'register') {
       if (u) fail(409, 'That username is already taken.');
       const salt = randomBytes(16).toString('hex');
-      u = { _id: randomUUID(), username, salt, password: (await derive(password, salt, 64) as Buffer).toString('hex') };
+      u = { _id: randomUUID(), username, ...(email ? { email } : {}), salt, password: (await derive(password, salt, 64) as Buffer).toString('hex') };
       try { await users.insertOne(u); } catch (error) { if ((error as { code?: number }).code === 11000) fail(409, 'That username is already taken.'); throw error; }
       // Retain registration security metadata for 90 days; no client-supplied IP headers.
       await registrationSecurity.insertOne({ _id: randomUUID(), userId: u._id, ip: req.socket.remoteAddress ?? 'unknown', registeredAt: new Date(), expiresAt: new Date(Date.now() + 90 * 86400_000) });
+      await notifySecurity('New Registration', u, {});
     } else {
       const candidate = await derive(password, u?.salt ?? 'missing-user', 64) as Buffer;
       if (!u || !timingSafeEqual(candidate, Buffer.from(u.password, 'hex'))) fail(401, 'Username or password is incorrect.');
+    }
+    if (mode === 'login' && !u.firstLoginNotifiedAt) {
+      const marked = await users.updateOne({ _id: u._id, firstLoginNotifiedAt: { $exists: false } }, { $set: { firstLoginNotifiedAt: new Date() } });
+      if (marked.modifiedCount) await notifySecurity('First Login', u, {});
     }
     const token = randomBytes(32).toString('hex');
     await sessions.insertOne({ _id: hash(token), userId: u._id, expires: new Date(Date.now() + 7 * 86400_000) });
     cookie(res, token, 7 * 86400_000);
     res.json({ ok: true });
+  });
+  router.patch('/account/identity', async (req, res) => {
+    const u = user(res);
+    const password = req.body?.password;
+    if (typeof password !== 'string') fail(400, 'Current password is required.');
+    const candidate = await derive(password, u.salt, 64) as Buffer;
+    if (!timingSafeEqual(candidate, Buffer.from(u.password, 'hex'))) fail(403, 'Current password is incorrect.');
+    const username = req.body?.username === undefined ? u.username : text(req.body.username, 30).toLowerCase();
+    const email = req.body?.email === undefined ? (u.email ?? '') : text(req.body.email, 254, false).toLowerCase();
+    if (!/^[a-z0-9_]{3,30}$/.test(username)) fail(400, 'Invalid username.');
+    if (email && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) fail(400, 'Invalid email address.');
+    if (username === u.username && email === (u.email ?? '')) return res.json({ ok: true, unchanged: true });
+    const details: Record<string, string> = {};
+    if (username !== u.username) { details.previousUsername = u.username; details.newUsername = username; }
+    if (email !== (u.email ?? '')) { details.previousEmail = u.email ?? 'not provided'; details.newEmail = email || 'not provided'; }
+    try {
+      await users.updateOne({ _id: u._id }, { $set: { username, email } });
+    } catch (error) { if ((error as { code?: number }).code === 11000) fail(409, 'Username already taken.'); throw error; }
+    await notifySecurity('Account Updated', { ...u, username, email }, details);
+    res.json({ ok: true, username, email });
+  });
+  router.get('/owner/account-security/:id', async (req, res) => {
+    const owner = requirePlatformOwner(req, res);
+    const reason = text(req.header('x-oathkeeper-audit-reason') ?? '', 240);
+    if (reason.length < 8) fail(400, 'Provide an investigation reason.');
+    const targetId = String(req.params.id);
+    await auditOwner(owner._id, null, 'review-account-security:' + targetId, reason);
+    const events = await securityEvents.find({ userId: targetId }).sort({ at: -1 }).limit(100).toArray();
+    res.json(events.map(e => ({ event: e.event, at: e.at, details: e.details })));
   });
   router.post('/logout', async (req, res) => {
     const token = (req.headers.cookie ?? '').split(';').map(part => part.trim()).find(part => part.startsWith('oathkeeper_session='))?.slice(19);
