@@ -193,7 +193,6 @@ export async function createCommunityRouter(db: Db, options: Options) {
     const reason = text(req.header('x-oathkeeper-audit-reason') ?? '', 240);
     const q = text(req.query.q ?? '', 80, false).toLowerCase();
     const escaped = q.replace(/[^a-z0-9 _-]/g, '');
-    const matched = rows.filter(g => g.name.toLowerCase().includes(q)).slice(0, 100);');
     const matched = await groups.find(q ? { name: { $regex: escaped, $options: 'i' } } : {}).limit(100).toArray();
     await auditOwner(u._id, null, 'list-groups', reason);
     res.json(matched.map(g => ({ id: g._id, name: g.name, ownerId: g.ownerId, memberCount: g.members.length, visibility: 'private' })));
