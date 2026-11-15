@@ -27,6 +27,8 @@ try {
     moderator: process.env.MODERATOR_USERNAME,
     platformOwnerId: process.env.PLATFORM_OWNER_USER_ID,
     platformOwnerSecret: process.env.PLATFORM_OWNER_SECRET,
+    securityNotificationWebhook: process.env.SECURITY_NOTIFICATION_WEBHOOK,
+    securityNotificationToken: process.env.SECURITY_NOTIFICATION_TOKEN,
   }));
 } catch {
   console.error('Could not initialize community storage. Check MongoDB and UPLOAD_DIR.');
