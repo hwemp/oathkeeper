@@ -43,12 +43,14 @@ export async function createCommunityRouter(db: Db, options: Options) {
   const direct = db.collection<Entry>('directMessages');
   const safetyReports = db.collection<SafetyReport>('safetyReports');
   const storage = db.collection<{ _id: string; used: number }>('storage');
+  const registrationSecurity = db.collection<{ _id: string; userId: string; ip: string; registeredAt: Date; expiresAt: Date }>('registrationSecurity');
   const ownerAudit = db.collection<{ _id: string; actorId: string; groupId: string | null; action: string; reason: string; created: Date }>('platformOwnerAudit');
   const limit = options.storageLimit ?? STORAGE_LIMIT;
   const directory = options.directory ? resolve(options.directory) : null;
   if (directory) await mkdir(directory, { recursive: true, mode: 0o700 });
   await Promise.all([
     users.createIndex({ username: 1 }, { unique: true }),
+    registrationSecurity.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     sessions.createIndex({ expires: 1 }, { expireAfterSeconds: 0 }),
     posts.createIndex({ groupId: 1, created: -1 }),
     comments.createIndex({ parentId: 1, created: -1 }),
@@ -171,6 +173,8 @@ export async function createCommunityRouter(db: Db, options: Options) {
       const salt = randomBytes(16).toString('hex');
       u = { _id: randomUUID(), username, salt, password: (await derive(password, salt, 64) as Buffer).toString('hex') };
       try { await users.insertOne(u); } catch (error) { if ((error as { code?: number }).code === 11000) fail(409, 'That username is already taken.'); throw error; }
+      // Retain registration security metadata for 90 days; no client-supplied IP headers.
+      await registrationSecurity.insertOne({ _id: randomUUID(), userId: u._id, ip: req.socket.remoteAddress ?? 'unknown', registeredAt: new Date(), expiresAt: new Date(Date.now() + 90 * 86400_000) });
     } else {
       const candidate = await derive(password, u?.salt ?? 'missing-user', 64) as Buffer;
       if (!u || !timingSafeEqual(candidate, Buffer.from(u.password, 'hex'))) fail(401, 'Username or password is incorrect.');
@@ -186,6 +190,16 @@ export async function createCommunityRouter(db: Db, options: Options) {
     cookie(res, '', 0); res.json({ ok: true });
   });
 
+
+  router.get('/owner/registration-security', async (req, res) => {
+    const u = requirePlatformOwner(req, res);
+    const reason = text(req.header('x-oathkeeper-audit-reason') ?? '', 240);
+    const records = await registrationSecurity.find({}).sort({ registeredAt: -1 }).limit(100).toArray();
+    await auditOwner(u._id, null, 'review-registration-security', reason);
+    const accounts = await users.find({ _id: { $in: records.map(r => r.userId) } }, { projection: { _id: 1, username: 1 } }).toArray();
+    const names = new Map(accounts.map(a => [a._id, a.username]));
+    res.json(records.map(r => ({ userId: r.userId, username: names.get(r.userId) ?? 'deleted account', ip: r.ip, registeredAt: r.registeredAt })));
+  });
 
   // Read-only oversight; never grants membership, reveals passwords, or enables direct contact.
   router.get('/owner/groups', async (req, res) => {
